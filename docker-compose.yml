@@ -1,0 +1,24 @@
+# Pinned explicitly: without this, Compose derives the project name from the
+# directory and would silently disagree with the docs if the folder is renamed.
+name: burk-scm
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: burk_scm
+      POSTGRES_USER: burk
+      POSTGRES_PASSWORD: burk
+    # Host 5432 is occupied by an unrelated project's Postgres container.
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U burk -d burk_scm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
