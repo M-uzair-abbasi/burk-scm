@@ -1,0 +1,3 @@
+# Runtime injection files written by `manage.py simulate_new_order` during a
+# live demo. Not part of the standing fixture set.
+*_injected.json

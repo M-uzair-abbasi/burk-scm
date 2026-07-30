@@ -7,12 +7,15 @@ import { apiFetch } from "./api";
 import type {
   Category,
   DashboardSummary,
+  OrderSummary,
   Paginated,
   Product,
   PurchaseOrder,
+  SalesOrder,
   StockMovement,
   Supplier,
   SupplierProduct,
+  SyncResponse,
 } from "./types";
 
 type Query = Record<string, string | number | boolean | undefined | null>;
@@ -80,6 +83,20 @@ export const suppliers = {
 export const supplierProducts = {
   list: (params?: Query) =>
     apiFetch<Paginated<SupplierProduct>>(`/api/supplier-products/${qs(params)}`),
+};
+
+export const orders = {
+  list: (params?: Query) =>
+    apiFetch<Paginated<SalesOrder>>(`/api/orders/${qs(params)}`),
+  get: (id: number) => apiFetch<SalesOrder>(`/api/orders/${id}/`),
+  summary: () => apiFetch<OrderSummary>("/api/orders/summary/"),
+  // "Sync now": pull every channel feed into the queue. Returns the per-channel
+  // SyncRuns plus a fresh summary so the reconciliation strip updates in one trip.
+  sync: () =>
+    apiFetch<SyncResponse>("/api/orders/sync/", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
 };
 
 export const purchaseOrders = {

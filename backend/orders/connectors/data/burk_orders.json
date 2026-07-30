@@ -1,0 +1,84 @@
+[
+  {
+    "order_ref": "BRK-ORD-10001",
+    "state": "pending",
+    "buyer": {
+      "name": "Bilal Ahmed",
+      "phone": "+923004455661",
+      "email": "bilal@example.invalid"
+    },
+    "ship_to": "Flat 5, Block C, Gulberg III, Lahore",
+    "currency": "PKR",
+    "amounts": {"subtotal": "1875.00", "shipping": "0.00", "total": "1875.00"},
+    "placed_at": "2026-07-19T09:15:00+05:00",
+    "items": [
+      {"sku": "BRK-2001", "title": "Oxford Shirt M", "qty": 1, "price": "1875.00"}
+    ]
+  },
+  {
+    "order_ref": "BRK-ORD-10002",
+    "state": "confirmed",
+    "buyer": {
+      "name": "Hina Raza",
+      "phone": "+923004455662",
+      "email": "hina@example.invalid"
+    },
+    "ship_to": "House 88, Askari 10, Lahore",
+    "currency": "PKR",
+    "amounts": {"subtotal": "3850.00", "shipping": "200.00", "total": "4050.00"},
+    "placed_at": "2026-07-20T11:42:00+05:00",
+    "items": [
+      {"sku": "BRK-1001", "title": "Cotton Kurta M", "qty": 2, "price": "1450.00"},
+      {"sku": "BRK-4001", "title": "Leather Belt", "qty": 1, "price": "950.00"}
+    ]
+  },
+  {
+    "order_ref": "BRK-ORD-10003",
+    "state": "packed",
+    "buyer": {
+      "name": "Usman Tariq",
+      "phone": "+923004455663",
+      "email": "usman@example.invalid"
+    },
+    "ship_to": "Office 3, Blue Area, Islamabad",
+    "currency": "PKR",
+    "amounts": {"subtotal": "2100.00", "shipping": "0.00", "total": "2100.00"},
+    "placed_at": "2026-07-21T16:05:00+05:00",
+    "items": [
+      {"sku": "BRK-1003", "title": "Linen Kurta M", "qty": 1, "price": "2100.00"}
+    ]
+  },
+  {
+    "order_ref": "BRK-ORD-10004",
+    "state": "shipped",
+    "buyer": {
+      "name": "Sadia Malik",
+      "phone": "+923004455664",
+      "email": "sadia@example.invalid"
+    },
+    "ship_to": "House 21, Model Town, Gujranwala",
+    "currency": "PKR",
+    "amounts": {"subtotal": "3000.00", "shipping": "150.00", "total": "3150.00"},
+    "placed_at": "2026-07-22T10:30:00+05:00",
+    "items": [
+      {"sku": "BRK-3001", "title": "Chino Trouser 32", "qty": 1, "price": "2400.00"},
+      {"sku": "BRK-4002", "title": "Silk Pocket Square", "qty": 1, "price": "600.00"}
+    ]
+  },
+  {
+    "order_ref": "BRK-ORD-10005",
+    "state": "delivered",
+    "buyer": {
+      "name": "Faizan Sheikh",
+      "phone": "+923004455665",
+      "email": "faizan@example.invalid"
+    },
+    "ship_to": "Flat 9, Clifton Block 2, Karachi",
+    "currency": "PKR",
+    "amounts": {"subtotal": "1200.00", "shipping": "0.00", "total": "1200.00"},
+    "placed_at": "2026-07-22T18:20:00+05:00",
+    "items": [
+      {"sku": "BRK-4003", "title": "Cufflinks Pair", "qty": 1, "price": "1200.00"}
+    ]
+  }
+]

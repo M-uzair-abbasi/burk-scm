@@ -148,3 +148,96 @@ export interface DashboardSummary {
   out_of_stock_count: number;
   open_po_count: number;
 }
+
+// --- Module 2: Multi-channel order aggregation ---
+
+export type OrderChannel = "burk" | "daraz";
+
+export type OrderStatus =
+  | "pending"
+  | "confirmed"
+  | "packed"
+  | "shipped"
+  | "delivered"
+  | "cancelled"
+  | "returned";
+
+export interface SalesOrderLine {
+  id: number;
+  sku: string;
+  product: number | null;
+  product_sku: string | null;
+  product_name: string;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+}
+
+export interface SalesOrder {
+  id: number;
+  reference: string;
+  channel: OrderChannel;
+  channel_display: string;
+  external_id: string;
+  status: OrderStatus;
+  status_display: string;
+  customer_name: string;
+  item_count: number;
+  currency: string;
+  total: string;
+  placed_at: string | null;
+  ingested_at: string;
+  last_synced_at: string | null;
+  // Present only on the detail endpoint:
+  customer_phone?: string;
+  customer_email?: string;
+  shipping_address?: string;
+  subtotal?: string;
+  shipping_fee?: string;
+  raw_payload?: Record<string, unknown>;
+  lines?: SalesOrderLine[];
+}
+
+export interface SyncRun {
+  id: number;
+  channel: OrderChannel;
+  channel_display: string;
+  started_at: string;
+  finished_at: string | null;
+  fetched: number;
+  created: number;
+  updated: number;
+  duplicates_skipped: number;
+  failed: number;
+  ok: boolean;
+  reconciled: boolean;
+}
+
+export interface QueueIntegrity {
+  dropped: number;
+  duplicated: number;
+  unique: number;
+  ok: boolean;
+  dropped_detail: { channel: string; external_id: string }[];
+  duplicated_detail: { channel: string; external_id: string; count: number }[];
+}
+
+export interface ChannelSummary {
+  label: string;
+  count: number;
+  last_sync: string | null;
+  last_run: SyncRun | null;
+}
+
+export interface OrderSummary {
+  total_orders: number;
+  by_channel: Record<string, ChannelSummary>;
+  by_status: Record<string, number>;
+  integrity: QueueIntegrity;
+  recent_runs: SyncRun[];
+}
+
+export interface SyncResponse {
+  runs: SyncRun[];
+  summary: OrderSummary;
+}

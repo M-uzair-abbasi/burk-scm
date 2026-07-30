@@ -16,6 +16,8 @@ from django.utils.text import slugify
 
 from inventory.models import Category, Product, StockMovement
 from inventory.services import record_movement
+from orders.models import SalesOrder, SalesOrderLine, SyncRun
+from orders.services import sync_all
 from purchasing.models import PurchaseOrder, PurchaseOrderLine
 from suppliers.models import Supplier, SupplierPriceTier, SupplierProduct
 
@@ -88,6 +90,9 @@ class Command(BaseCommand):
             StockMovement.objects.all().delete()
             PurchaseOrderLine.objects.all().delete()
             PurchaseOrder.objects.all().delete()
+            SalesOrderLine.objects.all().delete()
+            SalesOrder.objects.all().delete()
+            SyncRun.objects.all().delete()
             SupplierPriceTier.objects.all().delete()
             SupplierProduct.objects.all().delete()
             Product.objects.all().delete()
@@ -166,6 +171,15 @@ class Command(BaseCommand):
                 f"Seeded {Product.objects.count()} products, "
                 f"{Supplier.objects.count()} suppliers. "
                 f"{low} low-stock, {out} out-of-stock."
+            )
+        )
+        # Pull the simulated channel feeds so the order queue isn't empty on
+        # first load. Idempotent: re-running seed re-syncs without duplicating.
+        runs = sync_all()
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Synced {SalesOrder.objects.count()} orders from "
+                f"{len(runs)} channel(s): {', '.join(r.channel for r in runs)}."
             )
         )
         self.stdout.write(f"Logins: manager / operator  (password: {DEMO_PASSWORD})")

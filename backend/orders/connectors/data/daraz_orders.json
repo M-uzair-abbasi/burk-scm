@@ -1,0 +1,117 @@
+[
+  {
+    "order_id": 700100001,
+    "order_number": "204212345001",
+    "statuses": ["delivered"],
+    "customer_first_name": "Ayesha",
+    "customer_last_name": "Khan",
+    "address_shipping": {
+      "phone": "+923001112223",
+      "address1": "House 12, Street 4, DHA Phase 5",
+      "city": "Karachi",
+      "country": "Pakistan"
+    },
+    "price": "2900.00",
+    "shipping_fee": "150.00",
+    "created_at": "2026-07-18 14:03:22",
+    "order_items": [
+      {"sku": "BRK-1002", "name": "Cotton Kurta L", "quantity": 2, "item_price": "1450.00", "paid_price": "2900.00"}
+    ]
+  },
+  {
+    "order_id": 700100002,
+    "order_number": "204212345002",
+    "statuses": ["shipped"],
+    "customer_first_name": "Zainab",
+    "customer_last_name": "Ali",
+    "address_shipping": {
+      "phone": "+923001112224",
+      "address1": "Plot 7, Bahadurabad",
+      "city": "Karachi",
+      "country": "Pakistan"
+    },
+    "price": "1875.00",
+    "shipping_fee": "150.00",
+    "created_at": "2026-07-19 10:47:05",
+    "order_items": [
+      {"sku": "BRK-2002", "name": "Oxford Shirt L", "quantity": 1, "item_price": "1875.00", "paid_price": "1875.00"}
+    ]
+  },
+  {
+    "order_id": 700100003,
+    "order_number": "204212345003",
+    "statuses": ["pending"],
+    "customer_first_name": "Hamza",
+    "customer_last_name": "Iqbal",
+    "address_shipping": {
+      "phone": "+923001112225",
+      "address1": "House 45, Johar Town",
+      "city": "Lahore",
+      "country": "Pakistan"
+    },
+    "price": "1450.00",
+    "shipping_fee": "120.00",
+    "created_at": "2026-07-20 09:12:40",
+    "order_items": [
+      {"sku": "BRK-1001", "name": "Cotton Kurta M", "quantity": 1, "item_price": "1450.00", "paid_price": "1450.00"}
+    ]
+  },
+  {
+    "order_id": 700100004,
+    "order_number": "204212345004",
+    "statuses": ["packed"],
+    "customer_first_name": "Maryam",
+    "customer_last_name": "Nawaz",
+    "address_shipping": {
+      "phone": "+923001112226",
+      "address1": "House 3, Wapda Town",
+      "city": "Faisalabad",
+      "country": "Pakistan"
+    },
+    "price": "1900.00",
+    "shipping_fee": "150.00",
+    "created_at": "2026-07-21 13:55:18",
+    "order_items": [
+      {"sku": "BRK-4001", "name": "Leather Belt", "quantity": 2, "item_price": "950.00", "paid_price": "1900.00"}
+    ]
+  },
+  {
+    "order_id": 700100005,
+    "order_number": "204212345005",
+    "statuses": ["canceled"],
+    "customer_first_name": "Ibrahim",
+    "customer_last_name": "Shah",
+    "address_shipping": {
+      "phone": "+923001112227",
+      "address1": "House 9, Hayatabad",
+      "city": "Peshawar",
+      "country": "Pakistan"
+    },
+    "price": "2900.00",
+    "shipping_fee": "0.00",
+    "created_at": "2026-07-22 08:30:00",
+    "order_items": [
+      {"sku": "BRK-3001", "name": "Chino Trouser 32", "quantity": 1, "item_price": "2400.00", "paid_price": "2400.00"},
+      {"sku": "BRK-9999", "name": "Discontinued Scarf", "quantity": 1, "item_price": "500.00", "paid_price": "500.00"}
+    ]
+  },
+  {
+    "order_id": 700100003,
+    "order_number": "204212345003",
+    "statuses": ["pending"],
+    "customer_first_name": "Hamza",
+    "customer_last_name": "Iqbal",
+    "address_shipping": {
+      "phone": "+923001112225",
+      "address1": "House 45, Johar Town",
+      "city": "Lahore",
+      "country": "Pakistan"
+    },
+    "price": "1450.00",
+    "shipping_fee": "120.00",
+    "created_at": "2026-07-20 09:12:40",
+    "order_items": [
+      {"sku": "BRK-1001", "name": "Cotton Kurta M", "quantity": 1, "item_price": "1450.00", "paid_price": "1450.00"}
+    ]
+  }
+]
