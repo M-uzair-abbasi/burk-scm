@@ -22,7 +22,14 @@ The system digitises Burk.pk's warehouse: it aggregates orders across channels, 
 - **Idempotent ingestion** keyed on `(channel, external_id)` with an append-only **`SyncRun`** reconciliation ledger — every sync satisfies `fetched == created + updated + duplicates_skipped + failed`, so **no record is dropped or duplicated** (project KPI #3).
 - An **Orders** console screen: unified queue, channel/status filters, search, a **Sync now** button, and a live `0 dropped · 0 duplicated · N unique` integrity badge; plus an order-detail view with product-resolved lines and the raw channel payload.
 
-Later modules (barcode verification, packaging video, logistics, post-delivery review) are **not** built yet.
+**Module 3 (Intelligent Fulfilment & Barcode Verification)** is complete:
+
+- A **packing station**: pick an order from the queue, work a digital packing list, and **scan each item's barcode** before sealing.
+- **Real-time mismatch interception** — scanning an item that doesn't belong to the order flashes a full-screen red warning and sounds an audio buzz to block it (project KPI #1). Every scan, matched or not, is written to an append-only **`PackScan`** ledger, so 100% interception is auditable (`check_pack_integrity`).
+- Keyboard-wedge friendly: the scan input works with a real barcode/QR scanner, manual typing, or the on-screen simulate buttons — identically.
+- Completing a pack decrements stock through the ledger (`SALE` movements) and marks the order **Packed** — this is where Module 2's deferred stock movement finally happens.
+
+Later modules (packaging video, logistics, post-delivery review) are **not** built yet.
 
 ## Stack
 
@@ -110,13 +117,24 @@ Open **http://localhost:3001** and sign in:
    Click **Sync now** again → the new order appears **exactly once** and the unique count rises by one.
 4. Open any order to see product-resolved lines (an unstocked marketplace SKU is flagged) and the raw channel payload.
 
+### Barcode verification (Module 3)
+
+1. **Packing** lists orders awaiting packing, oldest first. Click **Start packing** on one.
+2. At the station, scan (or type + Enter) each item's barcode — the line fills green as its
+   required quantity is verified.
+3. Scan an item that doesn't belong to the order → a **full-screen red flash + audio buzz**
+   blocks it; the mismatch is logged but never counts toward completion.
+4. Once every item is verified, click **Complete pack** → stock is decremented (a `SALE`
+   ledger movement per line) and the order flips to **Packed**.
+
 ## Useful commands
 
 ```bash
 cd backend
-uv run python manage.py test                    # full test suite (45 tests)
+uv run python manage.py test                    # full test suite (59 tests)
 uv run python manage.py recalculate_stock --check   # prove ledger == cache (exits non-zero on drift)
 uv run python manage.py check_order_integrity       # prove no dropped/duplicated orders — KPI #3 (exits non-zero on drift)
+uv run python manage.py check_pack_integrity        # prove no mismatch was ever packed — KPI #1 (exits non-zero on breach)
 uv run python manage.py sync_orders                 # pull channel feeds into the queue (CLI "Sync now")
 uv run python manage.py simulate_new_order --channel daraz   # inject one demo order for the next sync
 uv run python manage.py seed_demo --reset       # wipe and reseed demo data (runs an initial order sync)
@@ -127,6 +145,7 @@ uv run python manage.py seed_demo --reset       # wipe and reseed demo data (run
 - The frontend reaches the API through a **Next rewrites proxy** (`/api/*` → `127.0.0.1:8000`), so the browser only ever sees one origin — no CORS, and the session cookie is sent normally. CSRF is still enforced (`CSRF_TRUSTED_ORIGINS` covers `localhost:3001`).
 - Every stock change goes through `inventory.services.record_movement()` — one writer, one transaction, row-locked. The ledger is the source of truth; `quantity_on_hand` is a cache of it.
 - Order ingestion goes through `orders.services.ingest_channel()` — idempotent on `(channel, external_id)`, one `SyncRun` per channel per sync. The unique constraint guarantees no duplicates; the reconciliation invariant guarantees nothing fetched is dropped. Order ingestion does **not** touch stock — that happens later at fulfilment (Module 3).
+- Barcode verification goes through `fulfillment.services` — every scan is appended to the `PackScan` ledger (matched, mismatch, or overscan), and only a `complete_packing` with all lines fully scanned decrements stock (`SALE` movements) and marks the order Packed. A mismatch is recorded but can never advance the pack, which is what makes KPI #1 auditable.
 
 ## Project layout
 
@@ -140,6 +159,7 @@ burk-scm/
 │   ├── inventory/             # Category, Product, StockMovement, services, API
 │   ├── suppliers/             # Supplier, SupplierProduct, price tiers, API
 │   ├── purchasing/            # PurchaseOrder + lines, reorder/submit/receive
-│   └── orders/                # SalesOrder queue, channel connectors, idempotent sync + reconciliation
-└── frontend/                  # Next.js console (login, dashboard, orders, inventory, suppliers, POs)
+│   ├── orders/                # SalesOrder queue, channel connectors, idempotent sync + reconciliation
+│   └── fulfillment/           # PackingSession + append-only PackScan, scan validation, dispatch
+└── frontend/                  # Next.js console (login, dashboard, orders, packing, inventory, suppliers, POs)
 ```

@@ -8,10 +8,13 @@ import type {
   Category,
   DashboardSummary,
   OrderSummary,
+  PackQueueOrder,
+  PackSession,
   Paginated,
   Product,
   PurchaseOrder,
   SalesOrder,
+  ScanResponse,
   StockMovement,
   Supplier,
   SupplierProduct,
@@ -94,6 +97,37 @@ export const orders = {
   // SyncRuns plus a fresh summary so the reconciliation strip updates in one trip.
   sync: () =>
     apiFetch<SyncResponse>("/api/orders/sync/", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+};
+
+export const packing = {
+  // The queue action returns a plain list (not paginated).
+  queue: () => apiFetch<PackQueueOrder[]>("/api/packing/queue/"),
+  get: (id: number) => apiFetch<PackSession>(`/api/packing/${id}/`),
+  start: (orderId: number) =>
+    apiFetch<PackSession>("/api/packing/", {
+      method: "POST",
+      body: JSON.stringify({ order: orderId }),
+    }),
+  scan: (id: number, barcode: string) =>
+    apiFetch<ScanResponse>(`/api/packing/${id}/scan/`, {
+      method: "POST",
+      body: JSON.stringify({ barcode }),
+    }),
+  confirmLine: (id: number, line: number) =>
+    apiFetch<PackSession>(`/api/packing/${id}/confirm-line/`, {
+      method: "POST",
+      body: JSON.stringify({ line }),
+    }),
+  complete: (id: number) =>
+    apiFetch<PackSession>(`/api/packing/${id}/complete/`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  cancel: (id: number) =>
+    apiFetch<PackSession>(`/api/packing/${id}/cancel/`, {
       method: "POST",
       body: JSON.stringify({}),
     }),

@@ -16,6 +16,7 @@ from django.utils.text import slugify
 
 from inventory.models import Category, Product, StockMovement
 from inventory.services import record_movement
+from fulfillment.models import PackingSession, PackScan
 from orders.models import SalesOrder, SalesOrderLine, SyncRun
 from orders.services import sync_all
 from purchasing.models import PurchaseOrder, PurchaseOrderLine
@@ -90,6 +91,9 @@ class Command(BaseCommand):
             StockMovement.objects.all().delete()
             PurchaseOrderLine.objects.all().delete()
             PurchaseOrder.objects.all().delete()
+            # PackingSession PROTECTs its SalesOrder, so clear packing first.
+            PackScan.objects.all().delete()
+            PackingSession.objects.all().delete()
             SalesOrderLine.objects.all().delete()
             SalesOrder.objects.all().delete()
             SyncRun.objects.all().delete()

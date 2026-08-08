@@ -9,6 +9,7 @@ import { useAuth } from "@/components/AuthProvider";
 const NAV = [
   { href: "/dashboard", label: "Dashboard", managerOnly: false },
   { href: "/orders", label: "Orders", managerOnly: false },
+  { href: "/packing", label: "Packing", managerOnly: false },
   { href: "/inventory", label: "Inventory", managerOnly: false },
   { href: "/suppliers", label: "Suppliers", managerOnly: true },
   { href: "/purchase-orders", label: "Purchase Orders", managerOnly: true },

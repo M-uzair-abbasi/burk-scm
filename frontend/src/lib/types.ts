@@ -241,3 +241,71 @@ export interface SyncResponse {
   runs: SyncRun[];
   summary: OrderSummary;
 }
+
+// --- Module 3: Fulfilment / barcode verification ---
+
+export interface PackQueueOrder {
+  id: number;
+  reference: string;
+  channel: OrderChannel;
+  channel_display: string;
+  external_id: string;
+  customer_name: string;
+  item_count: number;
+  total: string;
+  placed_at: string | null;
+  status: OrderStatus;
+  status_display: string;
+}
+
+export type ScanResult = "ok" | "mismatch" | "overscan";
+
+export interface PackScan {
+  id: number;
+  barcode: string;
+  result: ScanResult;
+  result_display: string;
+  product: number | null;
+  product_name: string | null;
+  line: number | null;
+  manual: boolean;
+  scanned_at: string;
+}
+
+export interface PackLine {
+  line_id: number;
+  sku: string;
+  product_name: string;
+  barcode: string | null;
+  has_barcode: boolean;
+  required: number;
+  scanned: number;
+  complete: boolean;
+}
+
+export type PackSessionStatus = "in_progress" | "completed" | "cancelled";
+
+export interface PackSession {
+  id: number;
+  status: PackSessionStatus;
+  status_display: string;
+  complete: boolean;
+  started_at: string;
+  completed_at: string | null;
+  order: {
+    id: number;
+    reference: string;
+    channel: OrderChannel;
+    channel_display: string;
+    external_id: string;
+    customer_name: string;
+    status: OrderStatus;
+  };
+  lines: PackLine[];
+  recent_scans: PackScan[];
+}
+
+export interface ScanResponse {
+  scan: PackScan;
+  session: PackSession;
+}
