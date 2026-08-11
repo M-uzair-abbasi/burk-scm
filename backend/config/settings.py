@@ -37,6 +37,9 @@ INSTALLED_APPS = [
     "purchasing",
     "orders",
     "fulfillment",
+    "notifications",
+    "surveillance",
+    "logistics",
 ]
 
 MIDDLEWARE = [
@@ -94,6 +97,11 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Module 4: packaging-video clips (raw + ffmpeg-compressed). Gitignored
+# (/backend/media/) — generated demo artifacts, not source.
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
@@ -122,3 +130,25 @@ SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 # The frontend must read this token to echo it back in the X-CSRFToken header.
 CSRF_COOKIE_HTTPONLY = False
+
+# Module 4/5/6: real email delivery (notifications.channels.email_backend). The
+# console backend prints the message to the runserver log — nothing external is
+# contacted in dev/test. Point EMAIL_BACKEND at
+# django.core.mail.backends.smtp.EmailBackend and set EMAIL_HOST/EMAIL_HOST_USER/
+# EMAIL_HOST_PASSWORD/EMAIL_PORT/EMAIL_USE_TLS in .env for real SMTP (SendGrid,
+# Gmail, ...) with no code change.
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Burk.pk <no-reply@burk.pk>")
+
+# Module 6: how long after delivery the review-reminder notification is
+# scheduled for. Short by default so the demo can show it correctly NOT firing
+# immediately, then firing once dispatch_scheduled_notifications is run again
+# after the delay — a real deployment would use hours/days, not seconds.
+REVIEW_REMINDER_DELAY_SECONDS = env.int("REVIEW_REMINDER_DELAY_SECONDS", default=60)

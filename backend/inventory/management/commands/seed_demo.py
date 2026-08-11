@@ -17,10 +17,13 @@ from django.utils.text import slugify
 from inventory.models import Category, Product, StockMovement
 from inventory.services import record_movement
 from fulfillment.models import PackingSession, PackScan
+from logistics.models import Shipment, ShipmentEvent
+from notifications.models import Notification
 from orders.models import SalesOrder, SalesOrderLine, SyncRun
 from orders.services import sync_all
 from purchasing.models import PurchaseOrder, PurchaseOrderLine
 from suppliers.models import Supplier, SupplierPriceTier, SupplierProduct
+from surveillance.models import PackagingRecording
 
 User = get_user_model()
 
@@ -91,9 +94,16 @@ class Command(BaseCommand):
             StockMovement.objects.all().delete()
             PurchaseOrderLine.objects.all().delete()
             PurchaseOrder.objects.all().delete()
-            # PackingSession PROTECTs its SalesOrder, so clear packing first.
+            # PackingSession PROTECTs its SalesOrder, so clear packing (and its
+            # Module 4 recording) first. Notification/Shipment CASCADE from
+            # SalesOrder but are cleared explicitly too, for the same visibility
+            # every other model here gets.
+            PackagingRecording.objects.all().delete()
             PackScan.objects.all().delete()
             PackingSession.objects.all().delete()
+            ShipmentEvent.objects.all().delete()
+            Shipment.objects.all().delete()
+            Notification.objects.all().delete()
             SalesOrderLine.objects.all().delete()
             SalesOrder.objects.all().delete()
             SyncRun.objects.all().delete()

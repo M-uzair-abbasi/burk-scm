@@ -5,7 +5,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from logistics.services import book_shipment
 from orders.models import SalesOrder, SalesOrderLine
+from surveillance.services import capture_and_dispatch
 
 from .models import PackingSession
 from .serializers import PackScanSerializer, QueueOrderSerializer, session_detail
@@ -86,6 +88,17 @@ class PackingViewSet(viewsets.GenericViewSet):
         except DjangoValidationError as exc:
             return _bad(exc)
         session.refresh_from_db()
+        # Module 4: record + compress + email/WhatsApp the packaging video. Never
+        # lets a camera/ffmpeg/dispatch failure fail the pack itself — the order
+        # is already sealed by this point; capture_and_dispatch degrades to a
+        # FAILED PackagingRecording on error rather than raising.
+        capture_and_dispatch(session, user=request.user)
+        # Module 5: instant airway-bill booking, right after packing — no
+        # manual data entry. Same never-fail-the-pack guarantee as above.
+        try:
+            book_shipment(session.order, user=request.user)
+        except DjangoValidationError:
+            pass
         return Response(session_detail(session))
 
     @action(detail=True, methods=["post"])

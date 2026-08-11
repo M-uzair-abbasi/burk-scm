@@ -196,6 +196,9 @@ export interface SalesOrder {
   shipping_fee?: string;
   raw_payload?: Record<string, unknown>;
   lines?: SalesOrderLine[];
+  // Present only on the detail endpoint — Module 4/5/6 dispatch history.
+  notifications?: NotificationRecord[];
+  shipment?: Shipment | null;
 }
 
 export interface SyncRun {
@@ -303,9 +306,87 @@ export interface PackSession {
   };
   lines: PackLine[];
   recent_scans: PackScan[];
+  recording: PackagingRecording | null;
+  video_notifications: NotificationRecord[];
+  shipment: Shipment | null;
 }
 
 export interface ScanResponse {
   scan: PackScan;
   session: PackSession;
+}
+
+// --- Module 4: video surveillance + Module 5/6 notification ledger ---
+
+export type RecordingStatus =
+  | "pending"
+  | "recording"
+  | "processing"
+  | "ready"
+  | "failed";
+
+export interface PackagingRecording {
+  id: number;
+  status: RecordingStatus;
+  status_display: string;
+  video_url: string | null;
+  duration_seconds: number | null;
+  raw_size_bytes: number | null;
+  compressed_size_bytes: number | null;
+  sealed_at: string;
+  captured_at: string | null;
+  compressed_at: string | null;
+  error: string;
+}
+
+export type NotificationKind =
+  | "packaging_video"
+  | "shipment_tracking"
+  | "review_request";
+export type NotificationChannelType = "email" | "whatsapp";
+export type NotificationDeliveryStatus = "scheduled" | "sent" | "failed";
+
+export interface NotificationRecord {
+  id: number;
+  kind: NotificationKind;
+  kind_display: string;
+  channel: NotificationChannelType;
+  channel_display: string;
+  recipient: string;
+  status: NotificationDeliveryStatus;
+  status_display: string;
+  reference_event_at: string;
+  scheduled_for: string | null;
+  sent_at: string | null;
+  latency_seconds: number | null;
+  payload: Record<string, unknown>;
+  error: string;
+  created_at: string;
+}
+
+// --- Module 5: logistics + Module 6's delivery trigger ---
+
+export type Courier = "leopard" | "tcs" | "trax" | "mnp";
+export type ShipmentStatus = "booked" | "in_transit" | "delivered";
+
+export interface ShipmentEvent {
+  id: number;
+  status: ShipmentStatus;
+  status_display: string;
+  occurred_at: string;
+  source: string;
+}
+
+export interface Shipment {
+  id: number;
+  courier: Courier;
+  courier_display: string;
+  status: ShipmentStatus;
+  status_display: string;
+  tracking_number: string;
+  label_url: string;
+  booked_at: string;
+  in_transit_at: string | null;
+  delivered_at: string | null;
+  events: ShipmentEvent[];
 }

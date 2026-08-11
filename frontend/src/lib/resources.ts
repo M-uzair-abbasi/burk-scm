@@ -15,6 +15,7 @@ import type {
   PurchaseOrder,
   SalesOrder,
   ScanResponse,
+  Shipment,
   StockMovement,
   Supplier,
   SupplierProduct,
@@ -130,6 +131,16 @@ export const packing = {
     apiFetch<PackSession>(`/api/packing/${id}/cancel/`, {
       method: "POST",
       body: JSON.stringify({}),
+    }),
+};
+
+export const shipments = {
+  // Simulates the courier's delivery-status webhook — real bookings happen
+  // automatically at pack-complete, not through this endpoint.
+  advance: (id: number, status: "in_transit" | "delivered") =>
+    apiFetch<Shipment>(`/api/shipments/${id}/advance/`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
     }),
 };
 

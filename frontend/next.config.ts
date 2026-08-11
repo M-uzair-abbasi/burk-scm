@@ -32,6 +32,13 @@ const nextConfig: NextConfig = {
         // Appending here normalises both spellings to exactly one slash.
         destination: `${API_ORIGIN}/api/:path*/`,
       },
+      {
+        // Module 4: packaging-video clips are served straight from Django's
+        // MEDIA_URL. No trailing-slash normalisation needed — these are GETs
+        // for a static file, not APPEND_SLASH-sensitive API routes.
+        source: "/media/:path*",
+        destination: `${API_ORIGIN}/media/:path*`,
+      },
     ];
   },
 };

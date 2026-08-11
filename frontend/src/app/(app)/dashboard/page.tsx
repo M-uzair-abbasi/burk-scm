@@ -39,10 +39,25 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([dashboard.summary(), products.list({ low_stock: true })])
+    async function loadAllLowStock(): Promise<Product[]> {
+      // /api/products/ is paginated (PAGE_SIZE=25); a real deployment can
+      // have more low-stock SKUs than that, so page through everything
+      // rather than silently showing only the first page.
+      const all: Product[] = [];
+      let page = 1;
+      while (true) {
+        const batch = await products.list({ low_stock: true, page });
+        all.push(...batch.results);
+        if (!batch.next) break;
+        page += 1;
+      }
+      return all;
+    }
+
+    Promise.all([dashboard.summary(), loadAllLowStock()])
       .then(([s, low]) => {
         setSummary(s);
-        setLowStock(low.results);
+        setLowStock(low);
       })
       .catch(() => setError("Could not load the dashboard."));
   }, []);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 
 import { ChannelBadge } from "@/components/ChannelBadge";
 import { ApiError } from "@/lib/api";
@@ -51,7 +51,6 @@ function clientCheck(lines: PackLine[], barcode: string): ScanResult {
 export default function PackingStationPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
-  const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [session, setSession] = useState<PackSession | null>(null);
@@ -115,8 +114,10 @@ export default function PackingStationPage() {
     setBusy(true);
     setError(null);
     try {
+      // complete() also runs the Module 4 capture/compress/dispatch pipeline
+      // server-side before responding, so the returned session already carries
+      // the finished recording + notification statuses — no polling needed.
       setSession(await packing.complete(session.id));
-      setTimeout(() => router.push("/packing"), 1400);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not complete pack.");
     } finally {
@@ -168,14 +169,108 @@ export default function PackingStationPage() {
       </div>
 
       {done ? (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-8 text-center dark:border-emerald-900 dark:bg-emerald-950">
-          <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
-            ✓ Packed
+        <div className="space-y-4">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-8 text-center dark:border-emerald-900 dark:bg-emerald-950">
+            <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
+              ✓ Packed
+            </div>
+            <p className="mt-1 text-sm text-emerald-700/80 dark:text-emerald-300/80">
+              Every item verified. Stock decremented and the order marked Packed.
+            </p>
           </div>
-          <p className="mt-1 text-sm text-emerald-700/80 dark:text-emerald-300/80">
-            Every item verified. Stock decremented and the order marked Packed.
-            Returning to the queue…
-          </p>
+
+          {/* Module 4: packaging video + customer dispatch */}
+          <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Customer transparency — packaging video
+            </h3>
+
+            {!session.recording || session.recording.status === "pending" ||
+            session.recording.status === "recording" ||
+            session.recording.status === "processing" ? (
+              <p className="text-sm text-zinc-500">Recording &amp; compressing…</p>
+            ) : session.recording.status === "failed" ? (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                Recording failed: {session.recording.error || "unknown error"}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                    ✓ Video ready
+                  </span>
+                  <span className="text-zinc-500">
+                    {session.recording.duration_seconds?.toFixed(0)}s ·{" "}
+                    {session.recording.compressed_size_bytes
+                      ? `${Math.round(session.recording.compressed_size_bytes / 1024)} KB`
+                      : "—"}
+                  </span>
+                </div>
+                {session.recording.video_url && (
+                  // eslint-disable-next-line jsx-a11y/media-has-caption
+                  <video
+                    controls
+                    className="w-full max-w-xs rounded-lg border border-zinc-200 dark:border-zinc-800"
+                    src={session.recording.video_url}
+                  />
+                )}
+              </div>
+            )}
+
+            {session.video_notifications.length > 0 && (
+              <div className="mt-4 space-y-1.5 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                {session.video_notifications.map((n) => (
+                  <div key={n.id} className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-600 dark:text-zinc-300">
+                      {n.channel_display} → {n.recipient || "—"}
+                    </span>
+                    <span
+                      className={
+                        n.status === "sent"
+                          ? "font-medium text-emerald-600 dark:text-emerald-400"
+                          : n.status === "failed"
+                            ? "font-medium text-red-600 dark:text-red-400"
+                            : "font-medium text-zinc-500"
+                      }
+                    >
+                      {n.status === "sent" && n.latency_seconds !== null
+                        ? `Sent in ${n.latency_seconds.toFixed(1)}s`
+                        : n.status_display}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Module 5: instant courier booking, right alongside the video panel */}
+          {session.shipment && (
+            <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Shipment
+              </h3>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                  ✓ {session.shipment.status_display}
+                </span>
+                <span className="font-medium">{session.shipment.courier_display}</span>
+                <span className="font-mono text-zinc-500">
+                  {session.shipment.tracking_number}
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-zinc-500">
+                Booked automatically, no manual data entry — tracking code emailed
+                &amp; WhatsApped to the customer.
+              </p>
+            </div>
+          )}
+
+          <Link
+            href="/packing"
+            className="inline-block rounded-md bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          >
+            Back to queue
+          </Link>
         </div>
       ) : (
         <>

@@ -1,5 +1,8 @@
 from rest_framework import serializers
 
+from logistics.serializers import ShipmentSerializer
+from notifications.serializers import NotificationSerializer
+
 from .models import SalesOrder, SalesOrderLine, SyncRun
 
 
@@ -50,6 +53,13 @@ class SalesOrderListSerializer(serializers.ModelSerializer):
 
 class SalesOrderDetailSerializer(SalesOrderListSerializer):
     lines = SalesOrderLineSerializer(many=True, read_only=True)
+    # Module 4/5/6: every dispatch (packaging video, tracking, review reminder)
+    # for this order, newest first (Notification.Meta.ordering).
+    notifications = NotificationSerializer(many=True, read_only=True)
+    # Module 5: null until book_shipment() runs (right after packing). DRF's
+    # get_attribute() catches the reverse OneToOne's DoesNotExist and reads as
+    # None, so this renders "shipment": null rather than 500ing pre-booking.
+    shipment = ShipmentSerializer(read_only=True)
 
     class Meta(SalesOrderListSerializer.Meta):
         fields = SalesOrderListSerializer.Meta.fields + (
@@ -60,6 +70,8 @@ class SalesOrderDetailSerializer(SalesOrderListSerializer):
             "shipping_fee",
             "raw_payload",
             "lines",
+            "notifications",
+            "shipment",
         )
         read_only_fields = fields
 

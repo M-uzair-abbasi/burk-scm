@@ -1,6 +1,10 @@
 from rest_framework import serializers
 
+from logistics.serializers import ShipmentSerializer
+from notifications.models import Notification
+from notifications.serializers import NotificationSerializer
 from orders.models import SalesOrder
+from surveillance.serializers import recording_detail
 
 from .models import PackScan, PackingSession
 from .services import session_progress
@@ -91,5 +95,17 @@ def session_detail(session: PackingSession) -> dict:
             "status": order.status,
         },
         "lines": lines,
-        "recent_scans": PackScanSerializer(session.scans.all()[:12], many=True).data,
+        "recent_scans": PackScanSerializer(
+            session.scans.select_related("product").all()[:12], many=True
+        ).data,
+        "recording": recording_detail(getattr(session, "recording", None)),
+        # KPI #2 proof at the station itself: the packaging-video dispatch
+        # this session triggered, with each channel's status and latency.
+        "video_notifications": NotificationSerializer(
+            order.notifications.filter(kind=Notification.Kind.PACKAGING_VIDEO),
+            many=True,
+        ).data,
+        "shipment": ShipmentSerializer(getattr(order, "shipment", None)).data
+        if getattr(order, "shipment", None)
+        else None,
     }
