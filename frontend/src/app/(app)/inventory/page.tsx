@@ -22,8 +22,8 @@ export default function InventoryPage() {
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
-    setLoading(true);
     const t = setTimeout(() => {
+      setLoading(true);
       products
         .list({ search, category, low_stock: lowOnly || undefined })
         .then((r) => setRows(r.results))

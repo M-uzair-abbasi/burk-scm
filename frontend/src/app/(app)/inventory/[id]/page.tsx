@@ -172,7 +172,9 @@ export default function ProductDetailPage() {
             </select>
           </div>
           <div className="flex-1">
-            <label className="mb-1 block text-xs text-zinc-500">Note (optional)</label>
+            <label className="mb-1 block text-xs text-zinc-500">
+              Note{allowNegative ? " (required for override)" : " (optional)"}
+            </label>
             <input
               type="text"
               value={note}
@@ -180,15 +182,17 @@ export default function ProductDetailPage() {
               className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950"
             />
           </div>
-          <label className="flex items-center gap-2 pb-2 text-xs text-zinc-500">
-            <input
-              type="checkbox"
-              checked={allowNegative}
-              onChange={(e) => setAllowNegative(e.target.checked)}
-              className="h-4 w-4"
-            />
-            Allow below zero
-          </label>
+          {user?.is_manager && (
+            <label className="flex items-center gap-2 pb-2 text-xs text-zinc-500">
+              <input
+                type="checkbox"
+                checked={allowNegative}
+                onChange={(e) => setAllowNegative(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Allow below zero
+            </label>
+          )}
           <button
             type="submit"
             disabled={saving}

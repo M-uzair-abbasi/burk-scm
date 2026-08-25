@@ -1,0 +1,97 @@
+INDUSTRIAL INTERNSHIP PROJECT
+BRIEF
+Project Type: Industrial Internship leading to Cash Prize Incentives
+Industry Partner: Burk.pk (Powered by Devomech Solutions Pvt. Ltd.)
+Project Title: Automated Supply Chain & Smart Order Verification System (SCM-OVS)
+
+
+
+
+1. Project Overview
+Burk.pk is an active e-commerce brand seeking to digitize, fully automate, and error-proof its
+internal supply chain and fulfillment framework. Currently, managing multi-channel customer
+orders (coming from both our independent platform Burk.pk and our marketplace storefront on
+Daraz.pk) introduces significant manual bottlenecks, human errors in packing, and
+communication delays.
+This project aims to develop an intelligent, central software utility that aggregates orders across
+multiple sales channels, provides real-time inventory and supplier management, integrates
+physical hardware verification (barcode scanners/cameras) at the warehouse packaging
+stations to ensure zero-error fulfillment, and automates tracking and follow-up pipelines.
+Successful completion of this project will lead directly to industrial internship opportunities at
+Burk.pk and an exclusive cash prize for high-performing teams.
+
+2. Project Incentives & KPIs
+To foster academic excellence and reward professional execution, Burk.pk offers the following
+performance-based rewards to the selected project member:
+  ●​ Performance Cash Prize: If the student meets all specified system requirements and
+      achieves the established Key Performance Indicators (KPIs) upon final delivery, a cash
+      prize up to PKR 100,000 (One Hundred Thousand Rupees) will be awarded to the
+      team.
+
+Key Performance Indicators (KPIs) for the Reward:
+  1.​ Zero-Mismatch Validation: The barcode validation mechanism must effectively intercept
+      and visually/audibly flag 100% of mismatched inventory items scanned during test
+      packaging loops.
+  2.​ Synchronous Communication Latency: Automated media generation (packaging
+      recording) and dispatch via WhatsApp/Email must initiate successfully within 3 minutes of
+      an order being sealed and closed out by the operator.
+  3.​ Multi-Channel Sync Accuracy: API loops fetching multi-platform data from both Burk.pk
+      and Daraz.pk must reconcile order metrics without record dropped or duplicated entries.
+3. Core Project Modules & Functional Requirements
+Module 1: Centralized Inventory & Supplier Management
+ ●​ Real-time Stock Tracking: Monitor stock levels uniformly across all storage categories.
+ ●​ Smart Reorder Alerts: Trigger proactive system alerts when any component falls below
+    its designated safety-stock threshold (Low Inventory Warning).
+ ●​ Supplier Directory integration: Store full supplier profiles including vendor contact
+    parameters, wholesale pricing tiers, and delivery lead times. Provide a mechanism to
+    immediately place or draft a new supply order directly from the dashboard when inventory
+    runs low.
+
+Module 2: Multi-Channel Order Aggregation
+ ●​ Unified Order Pipeline: Connect to external storefront endpoints to automatically detect
+    and pull incoming orders from Daraz.pk (via Daraz Seller Center API integration or web
+    data ingestion loops) and Burk.pk into one combined, live queue.
+
+Module 3: Intelligent Fulfillment & Barcode Verification
+ ●​ Digital Packing List Generation: Build a system interface that outputs clear packing
+    checklists prioritized by receipt time or courier deadlines.
+ ●​ Anti-Error Scanner Integration: Connect physical barcode/QR scanners directly to the
+    software logic. Operators must scan each item prior to sealing it in the package.
+ ●​ Real-Time Error Highlighting: If an operator scans an item that does not belong to that
+    active order, the interface must instantly flash a highly visible error warning and emit an
+    audio signal to block the incorrect item from being packed.
+
+Module 4: Automated Video Surveillance & Customer Transparency
+ ●​ Packaging Smart Camera Capture: Trigger a localized overhead workspace camera to
+    record the full physical packaging sequence of each specific order.
+ ●​ Automated Media Dispatch: Upon finalizing and closing out the order packaging routine,
+    the platform must process/compress the clip and forward it directly to the customer via
+    automated Email and WhatsApp channels.
+
+Module 5: Logistics Integration & Automated Tracking
+ ●​ Courier API Linkage: Integrate with regional shipping and logistics services (e.g.,
+    Leopard, Trax, TCS, or M&P).
+ ●​ Instant Airway Bill Booking: Automatically push shipping information to the logistics
+    partner's server to generate courier bookings instantly without manual text data entry.
+ ●​ Tracking Code Distribution: Retrieve the resulting tracking ID back from the courier api
+    and broadcast it directly to the end customer via **Email** and **WhatsApp**.
+Module 6: Post-Purchase Engagement Loop
+  ●​ Delivery Review Trigger: Monitor the courier platform webhooks or delivery status. Once
+     the item updates to "Delivered," the system will initiate a pre-timed automated notification
+     across WhatsApp and Email reminding the user to submit their platform product review
+     and feedback.
+
+4. Recommended Technical Stack
+While the academic board or students can propose equivalent technology alternatives, the
+recommended structure includes:
+  ●​ Backend Services: Python (Django or FastAPI) or Node.js (Express), selected for
+      structural API manipulation capabilities.
+  ●​ Frontend Interface: React.js, Next.js, or Vue.js to develop a fast, accessible inventory
+      dashboard for warehouse personnel.
+  ●​ Computer Vision & Video Pipelines: OpenCV frameworks or FFmpeg hooks to manage
+      streaming data, clipping, and media file optimization.
+  ●​ Databases: PostgreSQL or MongoDB to archive system state, customer listings, logs,
+      and product directories.
+  ●​ Messaging APIs: WhatsApp Business Cloud API / Twilio for mobile notifications and
+      SendGrid/Nodemailer for robust mailing operations.
+

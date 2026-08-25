@@ -10,13 +10,22 @@ the same shape — this one file stands in for that pattern.
 
 from __future__ import annotations
 
-from .base import BookingResult, CourierAdapter
+from common.integrations import pending_live_health
+
+from .base import BookingRequest, BookingResult, CourierAdapter
 
 
 class LiveLeopardAdapter(CourierAdapter):
     name = "leopard"
 
-    def book(self, order) -> BookingResult:
+    def health(self) -> dict:
+        return pending_live_health(
+            self.name,
+            "LEOPARD_API_KEY",
+            "LEOPARD_API_PASSWORD",
+        )
+
+    def book(self, request: BookingRequest) -> BookingResult:
         raise NotImplementedError(
             "Live Leopard Courier integration requires LEOPARD_API_KEY and "
             "LEOPARD_API_PASSWORD. Implement the signed booking POST here."

@@ -1,9 +1,13 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
+from threading import Barrier
+from unittest import skipUnless
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.db import connection, connections
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from inventory.models import Product, StockMovement
@@ -11,6 +15,7 @@ from inventory.services import ledger_balance, record_movement
 from suppliers.models import Supplier, SupplierPriceTier, SupplierProduct
 
 from .models import PurchaseOrder
+from .serializers import PurchaseOrderLineSerializer
 from .services import create_reorder_po, receive_po, submit_po
 
 User = get_user_model()
@@ -77,6 +82,34 @@ class PurchasingServiceTests(TestCase):
             po.expected_date, timezone.localdate() + timedelta(days=12)
         )
 
+    def test_submit_uses_preserved_supplier_product_lead_time(self):
+        self.link.lead_time_days = 4
+        self.link.save(update_fields=["lead_time_days"])
+        po = create_reorder_po(product=self.product, user=self.manager)
+
+        self.link.lead_time_days = 8
+        self.link.save(update_fields=["lead_time_days"])
+        self.supplier.default_lead_time_days = 20
+        self.supplier.save(update_fields=["default_lead_time_days"])
+        submit_po(po)
+
+        po.refresh_from_db()
+        self.assertEqual(
+            po.expected_date,
+            timezone.localdate() + timedelta(days=4),
+        )
+
+    def test_reorder_line_api_exposes_supplier_terms_snapshot(self):
+        self.link.lead_time_days = 4
+        self.link.save(update_fields=["lead_time_days"])
+        po = create_reorder_po(product=self.product, user=self.manager)
+
+        data = PurchaseOrderLineSerializer(po.lines.get()).data
+
+        self.assertEqual(data.get("supplier_product"), self.link.id)
+        self.assertEqual(data.get("effective_lead_time_days"), 4)
+        self.assertEqual(data.get("price_tier_min_quantity"), 60)
+
     def test_submit_non_draft_raises(self):
         po = create_reorder_po(product=self.product, user=self.manager)
         submit_po(po)
@@ -136,3 +169,67 @@ class PurchasingServiceTests(TestCase):
         po = create_reorder_po(product=self.product, user=self.manager)
         with self.assertRaises(ValidationError):
             receive_po(po, user=self.manager)
+
+
+@skipUnless(connection.vendor == "postgresql", "requires PostgreSQL row locking")
+class ConcurrentReceiptTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_duplicate_full_receipt_has_one_stock_effect(self):
+        manager = User.objects.create_user(
+            username="receipt-race-manager",
+            password="x",
+            role=User.Role.MANAGER,
+        )
+        product = Product.objects.create(
+            sku="PO-RACE", name="Receipt Race", reorder_quantity=5
+        )
+        record_movement(
+            product=product,
+            quantity_delta=10,
+            reason=StockMovement.Reason.INITIAL,
+            user=manager,
+        )
+        supplier = Supplier.objects.create(
+            code="SUP-RACE", name="Race Supplier", default_lead_time_days=3
+        )
+        link = SupplierProduct.objects.create(
+            supplier=supplier,
+            product=product,
+            is_preferred=True,
+        )
+        SupplierPriceTier.objects.create(
+            supplier_product=link,
+            min_quantity=1,
+            unit_price=Decimal("25.00"),
+        )
+        po = create_reorder_po(product=product, user=manager, quantity=5)
+        submit_po(po)
+        barrier = Barrier(2)
+
+        def receive_once(_):
+            try:
+                local_po = PurchaseOrder.objects.get(pk=po.pk)
+                barrier.wait(timeout=10)
+                return receive_po(local_po, user=manager).pk
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            po_ids = list(pool.map(receive_once, range(2)))
+
+        product.refresh_from_db()
+        po.refresh_from_db()
+        line = po.lines.get()
+        self.assertEqual(po_ids, [po.id, po.id])
+        self.assertEqual(product.quantity_on_hand, 15)
+        self.assertEqual(line.quantity_received, 5)
+        self.assertEqual(
+            StockMovement.objects.filter(
+                product=product,
+                purchase_order=po,
+                reason=StockMovement.Reason.PURCHASE_RECEIPT,
+            ).count(),
+            1,
+        )
+        self.assertEqual(po.status, PurchaseOrder.Status.RECEIVED)

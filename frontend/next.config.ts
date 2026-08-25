@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const API_ORIGIN = process.env.API_ORIGIN ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
+  poweredByHeader: false,
+
   // Pin the workspace root to this folder. A stray package-lock.json in a
   // parent directory otherwise makes Next infer the wrong root and warn.
   turbopack: {
@@ -31,13 +34,6 @@ const nextConfig: NextConfig = {
         // APPEND_SLASH cannot redirect a POST without discarding its body.
         // Appending here normalises both spellings to exactly one slash.
         destination: `${API_ORIGIN}/api/:path*/`,
-      },
-      {
-        // Module 4: packaging-video clips are served straight from Django's
-        // MEDIA_URL. No trailing-slash normalisation needed — these are GETs
-        // for a static file, not APPEND_SLASH-sensitive API routes.
-        source: "/media/:path*",
-        destination: `${API_ORIGIN}/media/:path*`,
       },
     ];
   },

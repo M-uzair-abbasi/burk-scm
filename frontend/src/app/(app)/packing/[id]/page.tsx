@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { ChannelBadge } from "@/components/ChannelBadge";
+import { useAuth } from "@/components/AuthProvider";
 import { ApiError } from "@/lib/api";
 import { packing } from "@/lib/resources";
 import type { PackLine, PackSession, ScanResult } from "@/lib/types";
@@ -48,7 +49,28 @@ function clientCheck(lines: PackLine[], barcode: string): ScanResult {
   return "ok";
 }
 
+function hasActiveAutomation(session: PackSession): boolean {
+  const recordingActive =
+    !!session.recording &&
+    ["pending", "recording", "queued", "processing", "retrying"].includes(
+      session.recording.status,
+    );
+  const shipmentActive =
+    !!session.shipment_job &&
+    ["pending", "processing", "retry"].includes(session.shipment_job.status);
+  const notificationActive = session.video_notifications.some((notification) =>
+    ["scheduled", "processing", "retrying", "accepted"].includes(
+      notification.status,
+    ),
+  );
+  return (
+    session.status === "completed" &&
+    (recordingActive || shipmentActive || notificationActive)
+  );
+}
+
 export default function PackingStationPage() {
+  const { user } = useAuth();
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,13 +81,49 @@ export default function PackingStationPage() {
   const [flash, setFlash] = useState<null | "error">(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollStopped, setPollStopped] = useState(false);
+  const [pollCycle, setPollCycle] = useState(0);
+  const pollAttempts = useRef(0);
 
   useEffect(() => {
+    pollAttempts.current = 0;
     packing
       .get(id)
-      .then(setSession)
+      .then((loaded) => {
+        setPollStopped(false);
+        setSession(loaded);
+      })
       .finally(() => setLoading(false));
   }, [id]);
+
+  const automationActive = session ? hasActiveAutomation(session) : false;
+  useEffect(() => {
+    if (!automationActive) return;
+    let cancelled = false;
+
+    async function poll() {
+      while (!cancelled && pollAttempts.current < 30) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        if (cancelled) return;
+        try {
+          const fresh = await packing.get(id);
+          if (cancelled) return;
+          pollAttempts.current += 1;
+          setSession(fresh);
+          if (!hasActiveAutomation(fresh)) return;
+        } catch {
+          setPollStopped(true);
+          return;
+        }
+      }
+      if (!cancelled) setPollStopped(true);
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [automationActive, id, pollCycle]);
 
   const focusInput = useCallback(() => inputRef.current?.focus(), []);
   useEffect(() => {
@@ -113,10 +171,11 @@ export default function PackingStationPage() {
     if (!session) return;
     setBusy(true);
     setError(null);
+    pollAttempts.current = 0;
+    setPollStopped(false);
     try {
-      // complete() also runs the Module 4 capture/compress/dispatch pipeline
-      // server-side before responding, so the returned session already carries
-      // the finished recording + notification statuses — no polling needed.
+      // Completion commits stock plus durable recording/shipment jobs. External
+      // work proceeds in the worker and the bounded poll reflects that state.
       setSession(await packing.complete(session.id));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not complete pack.");
@@ -185,15 +244,16 @@ export default function PackingStationPage() {
               Customer transparency — packaging video
             </h3>
 
-            {!session.recording || session.recording.status === "pending" ||
-            session.recording.status === "recording" ||
-            session.recording.status === "processing" ? (
-              <p className="text-sm text-zinc-500">Recording &amp; compressing…</p>
+            {!session.recording ? (
+              <p className="text-sm text-zinc-500">Recording state unavailable.</p>
             ) : session.recording.status === "failed" ? (
               <p className="text-sm text-red-600 dark:text-red-400">
-                Recording failed: {session.recording.error || "unknown error"}
+                Recording failed
+                {user?.is_manager && session.recording.error
+                  ? `: ${session.recording.error}`
+                  : ". Ask a manager to review the worker failure."}
               </p>
-            ) : (
+            ) : session.recording.status === "ready" ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
@@ -207,12 +267,25 @@ export default function PackingStationPage() {
                   </span>
                 </div>
                 {session.recording.video_url && (
-                  // eslint-disable-next-line jsx-a11y/media-has-caption
                   <video
                     controls
                     className="w-full max-w-xs rounded-lg border border-zinc-200 dark:border-zinc-800"
                     src={session.recording.video_url}
                   />
+                )}
+              </div>
+            ) : (
+              <div className="text-sm">
+                <span className="font-medium text-amber-700 dark:text-amber-300">
+                  {session.recording.status_display}
+                </span>
+                <span className="ml-2 text-zinc-500">
+                  attempt {session.recording.processing_attempts}
+                </span>
+                {user?.is_manager && session.recording.error && (
+                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                    {session.recording.error}
+                  </p>
                 )}
               </div>
             )}
@@ -230,39 +303,85 @@ export default function PackingStationPage() {
                           ? "font-medium text-emerald-600 dark:text-emerald-400"
                           : n.status === "failed"
                             ? "font-medium text-red-600 dark:text-red-400"
-                            : "font-medium text-zinc-500"
+                            : "font-medium text-amber-600 dark:text-amber-400"
                       }
                     >
                       {n.status === "sent" && n.latency_seconds !== null
                         ? `Sent in ${n.latency_seconds.toFixed(1)}s`
                         : n.status_display}
                     </span>
+                    {user?.is_manager && n.error && (
+                      <span className="ml-2 text-xs text-red-600 dark:text-red-400">
+                        {n.error}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Module 5: instant courier booking, right alongside the video panel */}
-          {session.shipment && (
+          {/* Module 5: durable courier booking, right alongside the video panel */}
+          {(session.shipment || session.shipment_job) && (
             <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
                 Shipment
               </h3>
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                  ✓ {session.shipment.status_display}
-                </span>
-                <span className="font-medium">{session.shipment.courier_display}</span>
-                <span className="font-mono text-zinc-500">
-                  {session.shipment.tracking_number}
-                </span>
-              </div>
+              {session.shipment ? (
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                    ✓ {session.shipment.status_display}
+                  </span>
+                  <span className="font-medium">
+                    {session.shipment.courier_display}
+                  </span>
+                  <span className="font-mono text-zinc-500">
+                    {session.shipment.tracking_number}
+                  </span>
+                </div>
+              ) : (
+                <div className="text-sm">
+                  <span
+                    className={
+                      session.shipment_job?.status === "failed"
+                        ? "font-medium text-red-600 dark:text-red-400"
+                        : "font-medium text-amber-700 dark:text-amber-300"
+                    }
+                  >
+                    {session.shipment_job?.status === "retry"
+                      ? "Courier booking retry scheduled"
+                      : session.shipment_job?.status === "failed"
+                        ? "Courier booking failed"
+                        : session.shipment_job?.status === "processing"
+                          ? "Booking courier…"
+                          : "Courier booking queued"}
+                  </span>
+                  {user?.is_manager && session.shipment_job?.error && (
+                    <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                      {session.shipment_job.error}
+                    </p>
+                  )}
+                </div>
+              )}
               <p className="mt-2 text-xs text-zinc-500">
-                Booked automatically, no manual data entry — tracking code emailed
-                &amp; WhatsApped to the customer.
+                Booking and tracking notifications are durable worker jobs; no
+                manual airway-bill entry is required.
               </p>
             </div>
+          )}
+
+          {pollStopped && hasActiveAutomation(session) && (
+            <button
+              onClick={async () => {
+                pollAttempts.current = 0;
+                setPollStopped(false);
+                setPollCycle((cycle) => cycle + 1);
+                setSession(await packing.get(session.id));
+              }}
+              className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              Refresh automation status
+            </button>
           )}
 
           <Link

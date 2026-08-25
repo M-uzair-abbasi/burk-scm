@@ -1,9 +1,11 @@
 from django.contrib import admin
 
+from common.admin import ReadOnlyAdminMixin, ReadOnlyInlineMixin
+
 from .models import PackingSession, PackScan
 
 
-class PackScanInline(admin.TabularInline):
+class PackScanInline(ReadOnlyInlineMixin, admin.TabularInline):
     model = PackScan
     extra = 0
     can_delete = False
@@ -12,7 +14,7 @@ class PackScanInline(admin.TabularInline):
 
 
 @admin.register(PackingSession)
-class PackingSessionAdmin(admin.ModelAdmin):
+class PackingSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = ("id", "order", "status", "operator", "started_at", "completed_at")
     list_filter = ("status",)
     search_fields = ("order__reference", "order__external_id")
@@ -21,7 +23,7 @@ class PackingSessionAdmin(admin.ModelAdmin):
 
 
 @admin.register(PackScan)
-class PackScanAdmin(admin.ModelAdmin):
+class PackScanAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = ("scanned_at", "session", "barcode", "result", "product", "manual", "operator")
     list_filter = ("result", "manual")
     search_fields = ("barcode",)

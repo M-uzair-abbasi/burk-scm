@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { ChannelBadge } from "@/components/ChannelBadge";
 import { OrderStatusPill } from "@/components/OrderStatusPill";
+import { useAuth } from "@/components/AuthProvider";
 import { ApiError } from "@/lib/api";
 import { orders as ordersApi } from "@/lib/resources";
 import { formatDateTime, formatPKR } from "@/lib/format";
@@ -29,6 +30,7 @@ const CHANNEL_OPTIONS = [
 
 export default function OrdersPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const [rows, setRows] = useState<SalesOrder[]>([]);
   const [summary, setSummary] = useState<OrderSummary | null>(null);
   const [channel, setChannel] = useState("");
@@ -55,8 +57,8 @@ export default function OrdersPage() {
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
-    setLoading(true);
     const t = setTimeout(() => {
+      setLoading(true);
       loadList().finally(() => setLoading(false));
     }, 250);
     return () => clearTimeout(t);
@@ -70,9 +72,21 @@ export default function OrdersPage() {
       const created = res.runs.reduce((a, r) => a + r.created, 0);
       const updated = res.runs.reduce((a, r) => a + r.updated, 0);
       const dup = res.runs.reduce((a, r) => a + r.duplicates_skipped, 0);
-      setToast(
-        `Synced: ${created} new, ${updated} updated, ${dup} duplicate(s) skipped.`,
-      );
+      const failed = res.runs.reduce((a, r) => a + r.failed, 0);
+      if (res.overall_ok) {
+        setToast(
+          `Synced: ${created} new, ${updated} updated, ${dup} duplicate(s) skipped.`,
+        );
+      } else {
+        const failedChannels = res.runs
+          .filter((run) => !run.ok)
+          .map((run) => run.channel_display)
+          .join(", ");
+        setToast(null);
+        setError(
+          `Sync incomplete: ${failed} record(s) failed. Check ${failedChannels || "channel errors"}.`,
+        );
+      }
       setSummary(res.summary);
       await loadList();
     } catch (err) {
@@ -99,7 +113,8 @@ export default function OrdersPage() {
                     : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
                 }`}
               >
-                {integrity.dropped} dropped · {integrity.duplicated} duplicated ·{" "}
+                {integrity.dropped} dropped · {integrity.stale} stale ·{" "}
+                {integrity.duplicated} duplicated · {integrity.mismatched} mismatched ·{" "}
                 {integrity.unique} unique
               </span>
             )}
@@ -118,13 +133,15 @@ export default function OrdersPage() {
                 </div>
               ))}
           </div>
-          <button
-            onClick={onSync}
-            disabled={syncing}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            {syncing ? "Syncing…" : "Sync now"}
-          </button>
+          {user?.is_manager && (
+            <button
+              onClick={onSync}
+              disabled={syncing}
+              className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              {syncing ? "Syncing…" : "Sync now"}
+            </button>
+          )}
         </div>
         {toast && (
           <div className="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">

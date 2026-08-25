@@ -3,11 +3,13 @@
  * rather than hand-writing URLs, so the endpoint contract lives in one place.
  */
 
-import { apiFetch } from "./api";
+import { ApiError, apiFetch } from "./api";
 import type {
   Category,
   DashboardSummary,
   OrderSummary,
+  OperationalHealth,
+  OperationalMetrics,
   PackQueueOrder,
   PackSession,
   Paginated,
@@ -76,6 +78,23 @@ export const movements = {
 
 export const dashboard = {
   summary: () => apiFetch<DashboardSummary>("/api/dashboard/summary/"),
+};
+
+export const health = {
+  get: async () => {
+    try {
+      return await apiFetch<OperationalHealth>("/api/health/details/");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 503 && error.data) {
+        return error.data as OperationalHealth;
+      }
+      throw error;
+    }
+  },
+};
+
+export const metrics = {
+  get: () => apiFetch<OperationalMetrics>("/api/metrics/"),
 };
 
 export const suppliers = {

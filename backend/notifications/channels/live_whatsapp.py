@@ -12,11 +12,20 @@ whatsapp_simulated._render so the two channels stay message-for-message identica
 
 from __future__ import annotations
 
+from common.integrations import pending_live_health
+
 from .base import NotificationChannel
 
 
 class LiveWhatsAppChannel(NotificationChannel):
     name = "whatsapp"
+
+    def health(self) -> dict:
+        return pending_live_health(
+            self.name,
+            "WHATSAPP_ACCESS_TOKEN",
+            "WHATSAPP_PHONE_NUMBER_ID",
+        )
 
     def send(self, notification) -> dict:
         raise NotImplementedError(

@@ -25,8 +25,16 @@ class Command(BaseCommand):
             )
             return
 
+        pending = set(report.get("pending_booking_orders", []))
+        failed = set(report.get("failed_booking_orders", []))
         for ref in report["missing_shipment_orders"]:
-            self.stdout.write(self.style.WARNING(f"{ref}: shipped/delivered with no shipment"))
+            if ref in failed:
+                detail = "booking job failed"
+            elif ref in pending:
+                detail = "booking job has not completed"
+            else:
+                detail = "no booking job exists"
+            self.stdout.write(self.style.WARNING(f"{ref}: {detail}"))
         self.stdout.write(self.style.ERROR("Shipment integrity breach(es) found."))
         if options["check"]:
             raise SystemExit(1)

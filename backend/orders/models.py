@@ -30,6 +30,10 @@ class SalesOrder(models.Model):
         CANCELLED = "cancelled", "Cancelled"
         RETURNED = "returned", "Returned"
 
+    class PaymentMode(models.TextChoices):
+        PREPAID = "prepaid", "Prepaid"
+        COD = "cod", "Cash on delivery"
+
     channel = models.CharField(max_length=16, choices=Channel.choices, db_index=True)
     # The channel's own order identifier. Unique only *within* a channel — the
     # same string can legitimately appear on both Burk and Daraz — so the
@@ -45,11 +49,49 @@ class SalesOrder(models.Model):
         default=Status.PENDING,
         db_index=True,
     )
+    source_status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
 
     customer_name = models.CharField(max_length=255, blank=True)
     customer_phone = models.CharField(max_length=32, blank=True)
     customer_email = models.EmailField(blank=True)
     shipping_address = models.TextField(blank=True)
+    shipping_address_line1 = models.CharField(max_length=255, blank=True)
+    shipping_address_line2 = models.CharField(max_length=255, blank=True)
+    shipping_city = models.CharField(max_length=100, blank=True)
+    shipping_province = models.CharField(max_length=100, blank=True)
+    shipping_postal_code = models.CharField(max_length=32, blank=True)
+    shipping_country = models.CharField(max_length=2, default="PK")
+    customer_instructions = models.TextField(blank=True)
+
+    parcel_weight_kg = models.DecimalField(
+        max_digits=8, decimal_places=3, default=Decimal("0.000")
+    )
+    parcel_length_cm = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal("0.00")
+    )
+    parcel_width_cm = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal("0.00")
+    )
+    parcel_height_cm = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal("0.00")
+    )
+    cod_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
+    payment_mode = models.CharField(
+        max_length=16,
+        choices=PaymentMode.choices,
+        default=PaymentMode.PREPAID,
+    )
+    shipping_service_type = models.CharField(
+        max_length=64, default="standard"
+    )
+    pickup_account = models.CharField(max_length=64, blank=True)
 
     currency = models.CharField(max_length=8, default="PKR")
     subtotal = models.DecimalField(
@@ -119,6 +161,12 @@ class SalesOrderLine(models.Model):
 
     class Meta:
         ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name="sales_order_line_qty_positive",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.sku or self.product_name} ×{self.quantity}"

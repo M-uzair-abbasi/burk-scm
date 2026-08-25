@@ -1,16 +1,18 @@
 from django.contrib import admin
 
+from common.admin import ReadOnlyAdminMixin, ReadOnlyInlineMixin
+
 from .models import PurchaseOrder, PurchaseOrderLine
 
 
-class PurchaseOrderLineInline(admin.TabularInline):
+class PurchaseOrderLineInline(ReadOnlyInlineMixin, admin.TabularInline):
     model = PurchaseOrderLine
     extra = 1
     autocomplete_fields = ("product",)
 
 
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(admin.ModelAdmin):
+class PurchaseOrderAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = (
         "po_number",
         "supplier",

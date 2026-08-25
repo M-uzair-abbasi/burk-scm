@@ -32,7 +32,7 @@ class Command(BaseCommand):
             max_lat_str = f"{max_lat:.1f}s" if max_lat is not None else "n/a"
             self.stdout.write(
                 f"{label}: {report['sent']} sent (max latency {max_lat_str}), "
-                f"{report['failed']} failed, {report['stuck']} stuck unscheduled."
+                f"{report['failed']} failed, {report['stuck']} overdue."
             )
 
         if video_report["ok"]:
@@ -55,6 +55,19 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     f"STUCK: notification {n.id} ({n.order.reference}) never scheduled or sent"
+                )
+            )
+        for n in video_report["failed_detail"]:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"FAILED: notification {n.id} ({n.order.reference}, "
+                    f"{n.get_channel_display()}): {n.error or 'send failed'}"
+                )
+            )
+        if video_report["evidence_count"] == 0:
+            self.stdout.write(
+                self.style.WARNING(
+                    "NO EVIDENCE: no packaging-video notification was sent."
                 )
             )
         self.stdout.write(self.style.ERROR("Dispatch latency breach(es) found."))

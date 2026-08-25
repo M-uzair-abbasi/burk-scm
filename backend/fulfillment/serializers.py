@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from logistics.serializers import ShipmentSerializer
+from logistics.services import shipment_job_detail
 from notifications.models import Notification
 from notifications.serializers import NotificationSerializer
 from orders.models import SalesOrder
@@ -56,7 +57,9 @@ class QueueOrderSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-def session_detail(session: PackingSession) -> dict:
+def session_detail(
+    session: PackingSession, *, include_operational_errors: bool = True
+) -> dict:
     """Full packing-station payload: the order, per-line scan progress (with each
     line's expected barcode so the client can validate instantly), and the recent
     scan history."""
@@ -98,14 +101,21 @@ def session_detail(session: PackingSession) -> dict:
         "recent_scans": PackScanSerializer(
             session.scans.select_related("product").all()[:12], many=True
         ).data,
-        "recording": recording_detail(getattr(session, "recording", None)),
+        "recording": recording_detail(
+            getattr(session, "recording", None),
+            include_error=include_operational_errors,
+        ),
         # KPI #2 proof at the station itself: the packaging-video dispatch
         # this session triggered, with each channel's status and latency.
         "video_notifications": NotificationSerializer(
             order.notifications.filter(kind=Notification.Kind.PACKAGING_VIDEO),
             many=True,
+            context={"include_operational_errors": include_operational_errors},
         ).data,
         "shipment": ShipmentSerializer(getattr(order, "shipment", None)).data
         if getattr(order, "shipment", None)
         else None,
+        "shipment_job": shipment_job_detail(
+            order, include_error=include_operational_errors
+        ),
     }

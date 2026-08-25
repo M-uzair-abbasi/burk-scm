@@ -5,10 +5,18 @@ a line and never counts toward completion, and completing a pack is the only
 thing that moves stock.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Barrier
+from unittest import skipUnless
+from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.core.management import call_command
+from django.db import connection, connections
+from django.test import TestCase, TransactionTestCase
+from rest_framework.test import APIClient
 
 from inventory.models import Product, StockMovement
 from inventory.services import ledger_balance, record_movement
@@ -22,6 +30,8 @@ from fulfillment.services import (
     session_progress,
     start_packing,
 )
+
+User = get_user_model()
 
 
 def make_product(sku, barcode, stock=100):
@@ -148,6 +158,43 @@ class CompleteTests(TestCase):
         self.assertEqual(order.status, "pending")
 
 
+@skipUnless(connection.vendor == "postgresql", "requires PostgreSQL row locking")
+class ConcurrentPackingCompletionTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_duplicate_completion_has_one_stock_effect(self):
+        product = make_product("BRK-PACK-RACE", "RACE-PACK", stock=10)
+        order = make_order(ref="SO-PACK-RACE", lines=[(product, 1)])
+        session = start_packing(order)
+        record_scan(session, product.barcode)
+        barrier = Barrier(2)
+
+        def complete_once(_):
+            try:
+                local_session = PackingSession.objects.get(pk=session.pk)
+                barrier.wait(timeout=10)
+                return complete_packing(local_session).pk
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            order_ids = list(pool.map(complete_once, range(2)))
+
+        product.refresh_from_db()
+        session.refresh_from_db()
+        self.assertEqual(order_ids, [order.id, order.id])
+        self.assertEqual(product.quantity_on_hand, 9)
+        self.assertEqual(
+            StockMovement.objects.filter(
+                product=product,
+                reason=StockMovement.Reason.SALE,
+                note__contains=order.reference,
+            ).count(),
+            1,
+        )
+        self.assertEqual(session.status, PackingSession.Status.COMPLETED)
+
+
 class ManualConfirmTests(TestCase):
     def test_manual_confirm_barcodeless_line(self):
         barcoded = make_product("BRK-A", "1111", stock=10)
@@ -168,8 +215,28 @@ class ManualConfirmTests(TestCase):
         packed = complete_packing(session)
         self.assertEqual(packed.status, "packed")
 
+    def test_manual_confirm_rejects_barcoded_line(self):
+        product = make_product("BRK-BAR", "3333", stock=10)
+        order = make_order(ref="SO-BARCODE", lines=[(product, 1)])
+        session = start_packing(order)
+
+        with self.assertRaisesMessage(ValidationError, "must be scanned"):
+            confirm_line_manual(session, order.lines.get())
+
 
 class SessionLifecycleTests(TestCase):
+    def test_empty_order_cannot_start_packing(self):
+        order = make_order(ref="SO-EMPTY", lines=[])
+
+        with self.assertRaisesMessage(ValidationError, "at least one line"):
+            start_packing(order)
+
+    def test_empty_order_is_never_complete(self):
+        order = make_order(ref="SO-EMPTY-PROGRESS", lines=[])
+        session = PackingSession.objects.create(order=order)
+
+        self.assertFalse(session_progress(session)["complete"])
+
     def test_refuse_packing_non_packable_order(self):
         p = make_product("BRK-A", "1111")
         order = make_order(status="shipped", lines=[(p, 1)])
@@ -190,3 +257,134 @@ class SessionLifecycleTests(TestCase):
         self.assertIn("SO-OLD", refs)
         self.assertIn("SO-CONF", refs)
         self.assertNotIn("SO-SHIP", refs)  # shipped is not awaiting packing
+
+
+class PackIntegrityCommandTests(TestCase):
+    def test_check_fails_without_completed_pack_evidence(self):
+        with self.assertRaises(SystemExit) as raised:
+            call_command("check_pack_integrity", "--check")
+
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_check_fails_for_completed_empty_session(self):
+        order = make_order(ref="SO-EMPTY-COMPLETE", lines=[])
+        PackingSession.objects.create(
+            order=order,
+            status=PackingSession.Status.COMPLETED,
+        )
+
+        with self.assertRaises(SystemExit) as raised:
+            call_command("check_pack_integrity", "--check")
+
+        self.assertEqual(raised.exception.code, 1)
+
+
+class PackingAuthorizationTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="pack-owner", password="x", role=User.Role.OPERATOR
+        )
+        self.other_operator = User.objects.create_user(
+            username="pack-other", password="x", role=User.Role.OPERATOR
+        )
+        self.manager = User.objects.create_user(
+            username="pack-manager", password="x", role=User.Role.MANAGER
+        )
+        self.product = make_product("BRK-AUTH", "AUTH-111", stock=10)
+        self.order = make_order(ref="SO-AUTH", lines=[(self.product, 1)])
+        self.session = start_packing(self.order, user=self.owner)
+        self.client = APIClient()
+
+    def _authenticate(self, user):
+        self.client.force_authenticate(user=user)
+
+    def test_owner_and_manager_can_retrieve_session(self):
+        for user in (self.owner, self.manager):
+            with self.subTest(user=user.username):
+                self._authenticate(user)
+                response = self.client.get(f"/api/packing/{self.session.id}/")
+                self.assertEqual(response.status_code, 200)
+
+    def test_non_owner_cannot_retrieve_session(self):
+        self._authenticate(self.other_operator)
+
+        response = self.client.get(f"/api/packing/{self.session.id}/")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_non_owner_cannot_scan_session(self):
+        self._authenticate(self.other_operator)
+
+        response = self.client.post(
+            f"/api/packing/{self.session.id}/scan/",
+            {"barcode": self.product.barcode},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(self.session.scans.exists())
+
+    def test_non_owner_cannot_confirm_line(self):
+        barcodeless = Product.objects.create(sku="BRK-AUTH-NB", name="No Barcode")
+        record_movement(
+            product=barcodeless,
+            quantity_delta=1,
+            reason=StockMovement.Reason.INITIAL,
+        )
+        line = SalesOrderLine.objects.create(
+            order=self.order,
+            sku=barcodeless.sku,
+            product=barcodeless,
+            product_name=barcodeless.name,
+            quantity=1,
+            unit_price=Decimal("100.00"),
+            line_total=Decimal("100.00"),
+        )
+        self._authenticate(self.other_operator)
+
+        response = self.client.post(
+            f"/api/packing/{self.session.id}/confirm-line/",
+            {"line": line.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(self.session.scans.exists())
+
+    def test_non_owner_cannot_complete_session(self):
+        record_scan(self.session, self.product.barcode, user=self.owner)
+        self._authenticate(self.other_operator)
+
+        with (
+            patch("fulfillment.views.seal_recording"),
+            patch("fulfillment.views.enqueue_shipment_booking"),
+        ):
+            response = self.client.post(
+                f"/api/packing/{self.session.id}/complete/", {}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, PackingSession.Status.IN_PROGRESS)
+
+    def test_non_owner_cannot_cancel_session(self):
+        self._authenticate(self.other_operator)
+
+        response = self.client.post(
+            f"/api/packing/{self.session.id}/cancel/", {}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, PackingSession.Status.IN_PROGRESS)
+
+    def test_non_owner_cannot_claim_existing_active_session(self):
+        self._authenticate(self.other_operator)
+
+        response = self.client.post(
+            "/api/packing/", {"order": self.order.id}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.operator, self.owner)

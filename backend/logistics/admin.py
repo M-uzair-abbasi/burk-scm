@@ -1,9 +1,11 @@
 from django.contrib import admin
 
-from .models import Shipment, ShipmentEvent
+from common.admin import ReadOnlyAdminMixin, ReadOnlyInlineMixin
+
+from .models import CourierWebhookEvent, Shipment, ShipmentEvent
 
 
-class ShipmentEventInline(admin.TabularInline):
+class ShipmentEventInline(ReadOnlyInlineMixin, admin.TabularInline):
     model = ShipmentEvent
     extra = 0
     can_delete = False
@@ -12,7 +14,7 @@ class ShipmentEventInline(admin.TabularInline):
 
 
 @admin.register(Shipment)
-class ShipmentAdmin(admin.ModelAdmin):
+class ShipmentAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = ("tracking_number", "order", "courier", "status", "booked_at", "delivered_at")
     list_filter = ("courier", "status")
     search_fields = ("tracking_number", "order__reference")
@@ -21,7 +23,7 @@ class ShipmentAdmin(admin.ModelAdmin):
 
 
 @admin.register(ShipmentEvent)
-class ShipmentEventAdmin(admin.ModelAdmin):
+class ShipmentEventAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = ("occurred_at", "shipment", "status", "source")
     list_filter = ("status", "source")
     readonly_fields = [f.name for f in ShipmentEvent._meta.fields]
@@ -34,3 +36,18 @@ class ShipmentEventAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(CourierWebhookEvent)
+class CourierWebhookEventAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+    list_display = (
+        "received_at",
+        "courier",
+        "provider_event_id",
+        "shipment",
+        "outcome",
+        "mapped_status",
+    )
+    list_filter = ("courier", "outcome", "mapped_status")
+    search_fields = ("provider_event_id", "shipment__tracking_number")
+    readonly_fields = [f.name for f in CourierWebhookEvent._meta.fields]

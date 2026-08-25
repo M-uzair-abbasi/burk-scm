@@ -1,13 +1,14 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from logistics.services import book_shipment
+from logistics.services import enqueue_shipment_booking
 from orders.models import SalesOrder, SalesOrderLine
-from surveillance.services import capture_and_dispatch
+from surveillance.services import seal_recording, start_recording
 
 from .models import PackingSession
 from .serializers import PackScanSerializer, QueueOrderSerializer, session_detail
@@ -39,8 +40,20 @@ class PackingViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
     queryset = PackingSession.objects.all()
 
+    def get_queryset(self):
+        queryset = PackingSession.objects.select_related("order", "operator")
+        if self.request.user.is_manager:
+            return queryset
+        return queryset.filter(operator=self.request.user)
+
     def get_object(self) -> PackingSession:
-        return get_object_or_404(PackingSession, pk=self.kwargs["pk"])
+        return get_object_or_404(self.get_queryset(), pk=self.kwargs["pk"])
+
+    def _detail(self, session):
+        return session_detail(
+            session,
+            include_operational_errors=self.request.user.is_manager,
+        )
 
     @action(detail=False, methods=["get"])
     def queue(self, request):
@@ -48,14 +61,27 @@ class PackingViewSet(viewsets.GenericViewSet):
 
     def create(self, request):
         order = get_object_or_404(SalesOrder, pk=request.data.get("order"))
+        active = order.packing_sessions.filter(
+            status=PackingSession.Status.IN_PROGRESS
+        ).first()
+        if (
+            active is not None
+            and active.operator_id != request.user.id
+            and not request.user.is_manager
+        ):
+            return Response(
+                {"detail": "This order is already assigned to another operator."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         try:
             session = start_packing(order, user=request.user)
         except DjangoValidationError as exc:
             return _bad(exc)
-        return Response(session_detail(session), status=status.HTTP_201_CREATED)
+        start_recording(session, user=request.user)
+        return Response(self._detail(session), status=status.HTTP_201_CREATED)
 
     def retrieve(self, request, pk=None):
-        return Response(session_detail(self.get_object()))
+        return Response(self._detail(self.get_object()))
 
     @action(detail=True, methods=["post"])
     def scan(self, request, pk=None):
@@ -67,7 +93,7 @@ class PackingViewSet(viewsets.GenericViewSet):
         except DjangoValidationError as exc:
             return _bad(exc)
         return Response(
-            {"scan": PackScanSerializer(scan).data, "session": session_detail(session)}
+            {"scan": PackScanSerializer(scan).data, "session": self._detail(session)}
         )
 
     @action(detail=True, methods=["post"], url_path="confirm-line")
@@ -78,28 +104,23 @@ class PackingViewSet(viewsets.GenericViewSet):
             confirm_line_manual(session, line, user=request.user)
         except DjangoValidationError as exc:
             return _bad(exc)
-        return Response(session_detail(session))
+        return Response(self._detail(session))
 
     @action(detail=True, methods=["post"])
     def complete(self, request, pk=None):
         session = self.get_object()
         try:
-            complete_packing(session, user=request.user)
+            # Packing state, stock movements, and both downstream durable jobs
+            # commit as one database unit. No external adapter runs here.
+            with transaction.atomic():
+                complete_packing(session, user=request.user)
+                session.refresh_from_db()
+                seal_recording(session, user=request.user)
+                enqueue_shipment_booking(session.order)
         except DjangoValidationError as exc:
             return _bad(exc)
         session.refresh_from_db()
-        # Module 4: record + compress + email/WhatsApp the packaging video. Never
-        # lets a camera/ffmpeg/dispatch failure fail the pack itself — the order
-        # is already sealed by this point; capture_and_dispatch degrades to a
-        # FAILED PackagingRecording on error rather than raising.
-        capture_and_dispatch(session, user=request.user)
-        # Module 5: instant airway-bill booking, right after packing — no
-        # manual data entry. Same never-fail-the-pack guarantee as above.
-        try:
-            book_shipment(session.order, user=request.user)
-        except DjangoValidationError:
-            pass
-        return Response(session_detail(session))
+        return Response(self._detail(session))
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
@@ -109,4 +130,4 @@ class PackingViewSet(viewsets.GenericViewSet):
         except DjangoValidationError as exc:
             return _bad(exc)
         session.refresh_from_db()
-        return Response(session_detail(session))
+        return Response(self._detail(session))

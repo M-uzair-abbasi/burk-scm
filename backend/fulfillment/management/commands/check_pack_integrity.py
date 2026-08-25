@@ -24,12 +24,26 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         breaches = []
+        qualifying_sessions = 0
 
         # (a) every completed session's lines are fully scanned by ok scans
         for session in PackingSession.objects.filter(
             status=PackingSession.Status.COMPLETED
         ):
             prog = session_progress(session)
+            if not prog["lines"]:
+                breaches.append(f"session {session.id}: completed with no order lines")
+                continue
+            qualifying_sessions += 1
+            invalid_quantities = [
+                f"{p['line'].product_name} ({p['required']})"
+                for p in prog["lines"]
+                if p["required"] <= 0
+            ]
+            if invalid_quantities:
+                breaches.append(
+                    f"session {session.id}: non-positive quantities {invalid_quantities}"
+                )
             if not prog["complete"]:
                 unfinished = [
                     f"{p['line'].product_name} {p['scanned']}/{p['required']}"
@@ -37,6 +51,9 @@ class Command(BaseCommand):
                     if not p["complete"]
                 ]
                 breaches.append(f"session {session.id}: unfinished lines {unfinished}")
+
+        if qualifying_sessions == 0:
+            breaches.append("no completed non-empty packing session evidence")
 
         # (b) a mismatch scan must never be attached to a line (never counts)
         bad = PackScan.objects.filter(
@@ -55,7 +72,8 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(
                     f"Packing integrity OK. {total} scan(s) logged, "
-                    f"{mismatches} mismatch(es) all intercepted, 0 counted as packed."
+                    f"{mismatches} mismatch(es) all intercepted, 0 counted as packed; "
+                    f"{qualifying_sessions} completed pack(s) verified."
                 )
             )
             return

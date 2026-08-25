@@ -5,7 +5,7 @@ a cache of it. Both are written in one transaction so they cannot disagree,
 and `recalculate_stock` can prove it.
 """
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
 from .models import Product, StockMovement
@@ -52,11 +52,20 @@ def record_movement(
     locked = Product.objects.select_for_update().get(pk=product.pk)
 
     new_quantity = locked.quantity_on_hand + quantity_delta
-    if new_quantity < 0 and not allow_negative:
-        raise ValidationError(
-            f"Insufficient stock for {locked.sku}: "
-            f"{locked.quantity_on_hand} on hand, requested {quantity_delta}."
-        )
+    if new_quantity < 0:
+        if not allow_negative:
+            raise ValidationError(
+                f"Insufficient stock for {locked.sku}: "
+                f"{locked.quantity_on_hand} on hand, requested {quantity_delta}."
+            )
+        if not (user and user.is_authenticated and user.is_manager):
+            raise PermissionDenied(
+                "Only managers may explicitly override stock below zero."
+            )
+        if not note.strip():
+            raise ValidationError(
+                "A non-blank audit note is required to override stock below zero."
+            )
 
     movement = StockMovement.objects.create(
         product=locked,

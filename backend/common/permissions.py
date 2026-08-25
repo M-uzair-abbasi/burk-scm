@@ -1,6 +1,19 @@
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 
+class IsManager(BasePermission):
+    """Allow an action only to an authenticated warehouse Manager."""
+
+    message = "Only managers may perform this action."
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.is_manager
+        )
+
+
 class IsManagerOrReadOnly(BasePermission):
     """Anyone signed in may read; only managers may write.
 

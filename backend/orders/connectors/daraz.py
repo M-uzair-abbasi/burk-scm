@@ -16,7 +16,12 @@ from decimal import Decimal
 
 from django.utils import timezone
 
-from .base import ChannelConnector, NormalizedLine, NormalizedOrder
+from .base import (
+    ChannelConnector,
+    NormalizedLine,
+    NormalizedOrder,
+    normalize_country_code,
+)
 from ._feed import load_feed
 
 # Daraz order statuses -> our normalized SalesOrder.Status values.
@@ -72,6 +77,7 @@ class DarazConnector(ChannelConnector):
         shipping = Decimal(str(raw.get("shipping_fee", "0.00")))
         statuses = raw.get("statuses") or []
         status_src = str(statuses[-1]).lower() if statuses else ""
+        cod_amount = Decimal(str(raw.get("cod_amount", "0.00")))
 
         address = ", ".join(
             part
@@ -99,6 +105,25 @@ class DarazConnector(ChannelConnector):
             customer_phone=addr.get("phone", ""),
             customer_email="",
             shipping_address=address,
+            shipping_address_line1=str(addr.get("address1", "")),
+            shipping_address_line2=str(addr.get("address2", "")),
+            shipping_city=str(addr.get("city", "")),
+            shipping_province=str(addr.get("province", addr.get("region", ""))),
+            shipping_postal_code=str(addr.get("post_code", addr.get("postal_code", ""))),
+            shipping_country=normalize_country_code(
+                addr.get("country_code", addr.get("country", "PK"))
+            ),
+            customer_instructions=str(raw.get("customer_instructions", "")),
+            parcel_weight_kg=Decimal(str(raw.get("parcel_weight_kg", "0.000"))),
+            parcel_length_cm=Decimal(str(raw.get("parcel_length_cm", "0.00"))),
+            parcel_width_cm=Decimal(str(raw.get("parcel_width_cm", "0.00"))),
+            parcel_height_cm=Decimal(str(raw.get("parcel_height_cm", "0.00"))),
+            cod_amount=cod_amount,
+            payment_mode=str(
+                raw.get("payment_method") or ("cod" if cod_amount > 0 else "prepaid")
+            ).lower(),
+            shipping_service_type=str(raw.get("shipping_service_type", "standard")),
+            pickup_account=str(raw.get("pickup_account", "")),
             currency="PKR",
             subtotal=subtotal,
             shipping_fee=shipping,

@@ -21,25 +21,41 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+async function fetchCurrentUser(): Promise<User | null> {
+  try {
+    return await auth.me();
+  } catch (err) {
+    // 401/403 simply means "not signed in" — not an error to surface.
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
-    try {
-      setUser(await auth.me());
-    } catch (err) {
-      // 401/403 simply means "not signed in" — not an error to surface.
-      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-        setUser(null);
-      } else {
-        throw err;
-      }
-    }
+    setUser(await fetchCurrentUser());
   }
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    let active = true;
+    fetchCurrentUser()
+      .then((currentUser) => {
+        if (active) setUser(currentUser);
+      })
+      .catch(() => {
+        if (active) setUser(null);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function login(username: string, password: string) {

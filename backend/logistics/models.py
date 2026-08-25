@@ -1,7 +1,7 @@
 """Module 5 — Logistics Integration & Automated Tracking.
 
-One Shipment per order, booked instantly once packing (and Module 4's dispatch)
-finishes. ShipmentEvent is the append-only log of every status change — booked,
+One Shipment per order, booked by a durable job once packing commits.
+ShipmentEvent is the append-only log of every status change — booked,
 in transit, delivered — the same ledger-plus-cache shape as StockMovement/
 Product.quantity_on_hand: Shipment.status is a denormalised cache of the latest
 event, kept in sync by advance_shipment(). A real courier's delivery webhook
@@ -39,10 +39,16 @@ class Shipment(models.Model):
         default=Status.BOOKED,
         db_index=True,
     )
-    tracking_number = models.CharField(max_length=32, unique=True)
-    label_url = models.CharField(max_length=255, blank=True)
-    # The courier API's own booking response, kept verbatim — the same audit
-    # role raw_payload plays for orders.
+    tracking_number = models.CharField(max_length=128, unique=True)
+    provider_booking_id = models.CharField(
+        max_length=128, null=True, blank=True, unique=True
+    )
+    request_idempotency_key = models.CharField(max_length=255, unique=True)
+    label_reference = models.CharField(max_length=255, blank=True)
+    label_url = models.CharField(max_length=500, blank=True)
+    booking_request = models.JSONField(default=dict, blank=True)
+    # Redacted provider response only. Secrets and customer PII are removed by
+    # the booking service before this audit snapshot is persisted.
     raw_response = models.JSONField(default=dict, blank=True)
 
     booked_at = models.DateTimeField(auto_now_add=True)
@@ -84,3 +90,52 @@ class ShipmentEvent(models.Model):
                 "ShipmentEvent is append-only; record a new event instead of editing one."
             )
         return super().save(*args, **kwargs)
+
+
+class CourierWebhookEvent(models.Model):
+    """Replay ledger for an authenticated courier delivery webhook."""
+
+    class Outcome(models.TextChoices):
+        RECEIVED = "received", "Received"
+        PROCESSED = "processed", "Processed"
+        IGNORED = "ignored", "Ignored"
+        REJECTED = "rejected", "Rejected"
+
+    courier = models.CharField(max_length=16, choices=Courier.choices)
+    provider_event_id = models.CharField(max_length=128)
+    shipment = models.ForeignKey(
+        Shipment,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="webhook_events",
+    )
+    provider_status = models.CharField(max_length=64, blank=True)
+    mapped_status = models.CharField(
+        max_length=16, choices=Shipment.Status.choices, blank=True
+    )
+    payload_hash = models.CharField(max_length=64)
+    redacted_payload = models.JSONField(default=dict, blank=True)
+    outcome = models.CharField(
+        max_length=16,
+        choices=Outcome.choices,
+        default=Outcome.RECEIVED,
+    )
+    error_code = models.CharField(max_length=64, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-received_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["courier", "provider_event_id"],
+                name="uniq_courier_provider_event",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["courier", "outcome", "-received_at"])
+        ]
+
+    def __str__(self):
+        return f"{self.courier}:{self.provider_event_id} ({self.outcome})"

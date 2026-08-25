@@ -1,0 +1,190 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16.10-bookworm
+        env:
+          POSTGRES_DB: burk_scm_ci
+          POSTGRES_USER: burk
+          POSTGRES_PASSWORD: burk-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U burk -d burk_scm_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://burk:burk-ci-only@127.0.0.1:5432/burk_scm_ci
+      SECRET_KEY: ci-only-key-9f0e92d86b7340e88df7bb9916ca1dfbe7554886b2ac4dc
+      DEBUG: "True"
+      PRODUCTION_MODE: "False"
+      DEMO_MODE_ENABLED: "True"
+      DEMO_ACTIONS_ENABLED: "True"
+      ALLOW_DEMO_RESET: "True"
+      REQUIRE_LIVE_INTEGRATIONS: "False"
+      ORDER_CONNECTOR_BACKENDS: '{"burk":"fixture","daraz":"fixture"}'
+      PACKAGING_CAMERA_BACKEND: simulated
+      COURIER_BACKEND: simulated
+      WHATSAPP_BACKEND: simulated
+      REVIEW_LINK_BACKEND: simulated
+      MEDIA_ROOT: ${{ runner.temp }}/burk-media
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.11.19
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Install media runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+
+      - name: Assert PostgreSQL engine
+        working-directory: backend
+        run: >-
+          uv run python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings');
+          import django; django.setup(); from django.conf import settings;
+          assert settings.DATABASES['default']['ENGINE'] == 'django.db.backends.postgresql'"
+
+      - name: Run full backend suite
+        working-directory: backend
+        run: uv run python manage.py test --verbosity 1
+
+      - name: Repeat PostgreSQL concurrency contracts
+        working-directory: backend
+        run: |
+          for iteration in 1 2 3; do
+            uv run python manage.py test \
+              inventory.tests.ConcurrentMovementTests \
+              purchasing.tests.ConcurrentReceiptTests \
+              fulfillment.tests.ConcurrentPackingCompletionTests \
+              operations.tests.ConcurrentClaimTests \
+              logistics.tests.ConcurrentCourierWebhookTests \
+              --verbosity 0
+          done
+
+      - name: Check lock, migration drift, and Django configuration
+        working-directory: backend
+        run: |
+          uv lock --check
+          uv run python manage.py makemigrations --check --dry-run
+          uv run python manage.py check
+
+      - name: Check production security and release configuration policy
+        working-directory: backend
+        env:
+          DEBUG: "False"
+          PRODUCTION_MODE: "True"
+          DEMO_MODE_ENABLED: "False"
+          DEMO_ACTIONS_ENABLED: "False"
+          ALLOW_DEMO_RESET: "False"
+          REQUIRE_LIVE_INTEGRATIONS: "True"
+          ALLOWED_HOSTS: scm.burk.pk
+          FRONTEND_ORIGIN: https://scm.burk.pk
+          PUBLIC_APP_ORIGIN: https://scm.burk.pk
+          ORDER_CONNECTOR_BACKENDS: '{"burk":"live","daraz":"live"}'
+          PACKAGING_CAMERA_BACKEND: live
+          PACKAGING_CAMERA_SOURCE: rtsp://camera.internal/stream
+          COURIER_BACKEND: live_leopard
+          LEOPARD_API_KEY: ci-configured-key
+          LEOPARD_API_PASSWORD: ci-configured-password
+          COURIER_WEBHOOK_SECRETS: '{"leopard":"ci-configured-webhook"}'
+          EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+          EMAIL_HOST: smtp.staging.vendor.test
+          WHATSAPP_BACKEND: live
+          WHATSAPP_ACCESS_TOKEN: ci-configured-token
+          WHATSAPP_PHONE_NUMBER_ID: "123456789"
+          NOTIFICATION_WEBHOOK_SECRETS: '{"whatsapp":"ci-configured-webhook"}'
+          REVIEW_LINK_BACKEND: live_burk
+          BURK_REVIEW_API_BASE_URL: https://reviews.staging.burk.pk
+          BURK_REVIEW_API_TOKEN: ci-configured-review-token
+          DARAZ_APP_KEY: ci-configured-key
+          DARAZ_APP_SECRET: ci-configured-secret
+          DARAZ_ACCESS_TOKEN: ci-configured-token
+          DARAZ_API_BASE_URL: https://daraz.staging.vendor.test
+          BURK_ORDER_API_BASE_URL: https://orders.staging.burk.pk
+          BURK_ORDER_API_TOKEN: ci-configured-token
+        run: |
+          uv run python manage.py check --deploy --fail-level WARNING
+          uv run python manage.py check_release_policy
+
+      - name: Run deterministic integrity acceptance
+        working-directory: backend
+        run: |
+          mkdir -p "$MEDIA_ROOT"
+          uv run python manage.py migrate --noinput
+          uv run python manage.py seed_demo
+          uv run python manage.py run_worker --once --worker-name=ci-worker
+          uv run python manage.py recalculate_stock --check
+          uv run python manage.py check_order_integrity --check
+          uv run python manage.py check_pack_integrity --check
+          uv run python manage.py check_shipment_integrity --check
+          uv run python manage.py check_operational_health --check
+          uv run python manage.py check_operational_metrics --check
+          uv run python manage.py cleanup_packaging_media --check
+
+      - name: Validate production Compose topology
+        env:
+          BURK_SCM_ENV_FILE: .env.production.example
+          POSTGRES_DB: burk_scm
+          POSTGRES_USER: burk_scm
+          POSTGRES_PASSWORD: ci-compose-only
+        run: docker compose --env-file .env.production.example -f compose.prod.yml config --quiet
+
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend release gates
+        working-directory: frontend
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run build
+          test -f .next/standalone/server.js
+
+      - name: Build production images
+        run: |
+          docker build --pull --tag burk-scm-backend:ci backend
+          docker build --pull --build-arg API_ORIGIN=http://api:8000 --tag burk-scm-frontend:ci frontend
+
+      - name: Minimize uv dependency cache
+        if: always()
+        working-directory: backend
+        run: uv cache prune --ci

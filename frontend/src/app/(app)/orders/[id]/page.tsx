@@ -1,31 +1,81 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { ChannelBadge } from "@/components/ChannelBadge";
 import { OrderStatusPill } from "@/components/OrderStatusPill";
+import { useAuth } from "@/components/AuthProvider";
 import { ApiError } from "@/lib/api";
 import { orders as ordersApi, shipments } from "@/lib/resources";
 import { formatDateTime, formatPKR } from "@/lib/format";
 import type { SalesOrder } from "@/lib/types";
 
+function hasActiveAutomation(order: SalesOrder): boolean {
+  const shipmentActive =
+    !!order.shipment_job &&
+    ["pending", "processing", "retry"].includes(order.shipment_job.status);
+  const notificationActive = (order.notifications ?? []).some((notification) =>
+    ["scheduled", "processing", "retrying", "accepted"].includes(
+      notification.status,
+    ),
+  );
+  return shipmentActive || notificationActive;
+}
+
 export default function OrderDetailPage() {
   const params = useParams<{ id: string }>();
+  const { user } = useAuth();
   const id = Number(params.id);
   const [order, setOrder] = useState<SalesOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [showRaw, setShowRaw] = useState(false);
   const [shipBusy, setShipBusy] = useState(false);
   const [shipError, setShipError] = useState<string | null>(null);
+  const [pollStopped, setPollStopped] = useState(false);
+  const [pollCycle, setPollCycle] = useState(0);
+  const pollAttempts = useRef(0);
 
   useEffect(() => {
+    pollAttempts.current = 0;
     ordersApi
       .get(id)
-      .then(setOrder)
+      .then((loaded) => {
+        setPollStopped(false);
+        setOrder(loaded);
+      })
       .finally(() => setLoading(false));
   }, [id]);
+
+  const automationActive = order ? hasActiveAutomation(order) : false;
+  useEffect(() => {
+    if (!automationActive) return;
+    let cancelled = false;
+
+    async function poll() {
+      while (!cancelled && pollAttempts.current < 30) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        if (cancelled) return;
+        try {
+          const fresh = await ordersApi.get(id);
+          if (cancelled) return;
+          pollAttempts.current += 1;
+          setOrder(fresh);
+          if (!hasActiveAutomation(fresh)) return;
+        } catch {
+          setPollStopped(true);
+          return;
+        }
+      }
+      if (!cancelled) setPollStopped(true);
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [automationActive, id, pollCycle]);
 
   // Demo stand-in for a real courier webhook (Module 5); DELIVERED also
   // triggers Module 6's scheduled review reminder server-side.
@@ -111,6 +161,10 @@ export default function OrderDetailPage() {
               <dt className="text-xs text-zinc-500">Last synced</dt>
               <dd>{formatDateTime(order.last_synced_at)}</dd>
             </div>
+            <div>
+              <dt className="text-xs text-zinc-500">Channel-reported status</dt>
+              <dd>{order.source_status_display}</dd>
+            </div>
           </dl>
         </div>
 
@@ -180,13 +234,14 @@ export default function OrderDetailPage() {
         </table>
       </div>
 
-      {/* Module 5: courier booking + tracking */}
-      {order.shipment && (
+      {/* Module 5: durable courier booking + tracking */}
+      {(order.shipment || order.shipment_job) && (
         <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Shipment
           </h3>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {order.shipment ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm">
               <span className="font-medium">{order.shipment.courier_display}</span>
               <span className="ml-2 font-mono text-zinc-500">
@@ -196,7 +251,8 @@ export default function OrderDetailPage() {
                 {order.shipment.status_display}
               </span>
             </div>
-            <div className="flex gap-2">
+            {user?.is_manager && (
+              <div className="flex gap-2">
               {order.shipment.status === "booked" && (
                 <button
                   disabled={shipBusy}
@@ -215,19 +271,64 @@ export default function OrderDetailPage() {
                   Simulate: mark delivered
                 </button>
               )}
+              </div>
+            )}
             </div>
-          </div>
+          ) : (
+            <div className="text-sm">
+              <span
+                className={
+                  order.shipment_job?.status === "failed"
+                    ? "font-medium text-red-600 dark:text-red-400"
+                    : "font-medium text-amber-700 dark:text-amber-300"
+                }
+              >
+                {order.shipment_job?.status === "retry"
+                  ? "Courier booking retry scheduled"
+                  : order.shipment_job?.status === "failed"
+                    ? "Courier booking failed"
+                    : order.shipment_job?.status === "processing"
+                      ? "Booking courier…"
+                      : "Courier booking queued"}
+              </span>
+              <span className="ml-2 text-xs text-zinc-500">
+                attempt {order.shipment_job?.attempts ?? 0}/
+                {order.shipment_job?.max_attempts ?? 0}
+              </span>
+              {user?.is_manager && order.shipment_job?.error && (
+                <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                  {order.shipment_job.error}
+                </p>
+              )}
+            </div>
+          )}
           {shipError && (
             <p className="mt-2 text-sm text-red-600 dark:text-red-400">{shipError}</p>
           )}
-          <ul className="mt-3 space-y-1 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
-            {order.shipment.events.map((e) => (
-              <li key={e.id}>
-                {formatDateTime(e.occurred_at)} — {e.status_display}
-              </li>
-            ))}
-          </ul>
+          {order.shipment && (
+            <ul className="mt-3 space-y-1 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
+              {order.shipment.events.map((e) => (
+                <li key={e.id}>
+                  {formatDateTime(e.occurred_at)} — {e.status_display}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
+      )}
+
+      {pollStopped && hasActiveAutomation(order) && (
+        <button
+          onClick={async () => {
+            pollAttempts.current = 0;
+            setPollStopped(false);
+            setPollCycle((cycle) => cycle + 1);
+            setOrder(await ordersApi.get(id));
+          }}
+          className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          Refresh automation status
+        </button>
       )}
 
       {/* Module 4/5/6: customer dispatch history */}
@@ -273,6 +374,11 @@ export default function OrderDetailPage() {
                     {n.status_display}
                   </span>
                 </div>
+                {user?.is_manager && n.error && (
+                  <p className="basis-full text-right text-xs text-red-600 dark:text-red-400">
+                    {n.error}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

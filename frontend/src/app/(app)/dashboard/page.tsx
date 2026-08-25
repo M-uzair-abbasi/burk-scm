@@ -4,9 +4,22 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { StockStatusPill } from "@/components/StockStatusPill";
-import { dashboard, products } from "@/lib/resources";
+import { useAuth } from "@/components/AuthProvider";
+import { dashboard, health, metrics, products } from "@/lib/resources";
 import { formatNumber } from "@/lib/format";
-import type { DashboardSummary, Product } from "@/lib/types";
+import type {
+  DashboardSummary,
+  OperationalHealth,
+  OperationalMetrics,
+  Product,
+} from "@/lib/types";
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "No evidence";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
 
 function Card({
   label,
@@ -34,8 +47,11 @@ function Card({
 }
 
 export default function DashboardPage() {
+  const { user } = useAuth();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [lowStock, setLowStock] = useState<Product[]>([]);
+  const [opsHealth, setOpsHealth] = useState<OperationalHealth | null>(null);
+  const [opsMetrics, setOpsMetrics] = useState<OperationalMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,13 +70,20 @@ export default function DashboardPage() {
       return all;
     }
 
-    Promise.all([dashboard.summary(), loadAllLowStock()])
-      .then(([s, low]) => {
+    Promise.all([
+      dashboard.summary(),
+      loadAllLowStock(),
+      user?.is_manager ? health.get() : Promise.resolve(null),
+      user?.is_manager ? metrics.get() : Promise.resolve(null),
+    ])
+      .then(([s, low, operational, operationalMetrics]) => {
         setSummary(s);
         setLowStock(low);
+        setOpsHealth(operational);
+        setOpsMetrics(operationalMetrics);
       })
       .catch(() => setError("Could not load the dashboard."));
-  }, []);
+  }, [user?.is_manager]);
 
   if (error) {
     return <p className="text-sm text-red-600">{error}</p>;
@@ -81,6 +104,113 @@ export default function DashboardPage() {
         />
         <Card label="Open purchase orders" value={summary.open_po_count} />
       </div>
+
+      {user?.is_manager && opsHealth && (
+        <div
+          className={`rounded-xl border p-5 ${
+            opsHealth.ok
+              ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40"
+              : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold">Operational readiness</h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                Database, worker, queue, media storage, and configured adapters
+              </p>
+            </div>
+            <span
+              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                opsHealth.ok
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200"
+                  : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200"
+              }`}
+            >
+              {opsHealth.ok ? "Ready" : "Attention required"}
+            </span>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            <div>
+              <div className="text-xs text-zinc-500">Worker heartbeat</div>
+              <div className="font-medium">
+                {opsHealth.components.worker.age_seconds === null
+                  ? "Missing"
+                  : `${opsHealth.components.worker.age_seconds.toFixed(0)}s ago`}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-zinc-500">Due jobs</div>
+              <div className="font-medium">{opsHealth.components.backlog.due}</div>
+            </div>
+            <div>
+              <div className="text-xs text-zinc-500">Failed jobs</div>
+              <div className="font-medium">{opsHealth.components.backlog.failed}</div>
+            </div>
+            <div>
+              <div className="text-xs text-zinc-500">Adapters</div>
+              <div className="font-medium">
+                {opsHealth.components.adapters.details.filter((item) => item.ok).length}/
+                {opsHealth.components.adapters.details.length} available
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {user?.is_manager && opsMetrics && (
+        <section className="overflow-hidden rounded-xl border border-zinc-200 bg-zinc-950 text-zinc-100 dark:border-zinc-700">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+            <div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                Warehouse control rail · {opsMetrics.window.hours}h
+              </div>
+              <h2 className="mt-1 text-base font-semibold">Operational signals</h2>
+            </div>
+            <span
+              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                opsMetrics.ok
+                  ? "bg-emerald-400/15 text-emerald-300"
+                  : "bg-red-400/15 text-red-300"
+              }`}
+            >
+              {opsMetrics.ok
+                ? "Within thresholds"
+                : `${opsMetrics.breaches.length} threshold ${opsMetrics.breaches.length === 1 ? "breach" : "breaches"}`}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 divide-x divide-y divide-zinc-800 sm:grid-cols-3 lg:grid-cols-6">
+            {[
+              ["Jobs due", formatNumber(opsMetrics.queue.due), `${opsMetrics.queue.failed} failed`],
+              ["Source lag", formatDuration(opsMetrics.sources.max_lag_seconds), `${opsMetrics.sources.missing.length} missing`],
+              ["Wrong items blocked", formatNumber(opsMetrics.packing.mismatches_intercepted), `${opsMetrics.packing.scans} scans`],
+              ["Delivery latency", formatDuration(opsMetrics.notifications.max_latency_seconds), `${opsMetrics.notifications.failed} failed`],
+              ["Media processing", formatDuration(opsMetrics.media.max_processing_seconds), `${opsMetrics.media.failed} failed`],
+              ["Booking failures", formatNumber(opsMetrics.shipments.booking_failures), "Courier jobs"],
+            ].map(([label, value, detail]) => (
+              <div key={label} className="min-w-0 px-4 py-4">
+                <div className="truncate text-xs text-zinc-500">{label}</div>
+                <div className="mt-1 font-mono text-xl font-semibold tracking-tight">
+                  {value}
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-zinc-600">{detail}</div>
+              </div>
+            ))}
+          </div>
+
+          {!opsMetrics.ok && (
+            <div className="border-t border-red-900/60 bg-red-950/30 px-5 py-3">
+              <p className="text-xs font-semibold text-red-300">Needs attention</p>
+              <ul className="mt-1 space-y-1 font-mono text-[11px] text-red-200/80">
+                {opsMetrics.breaches.slice(0, 4).map((breach) => (
+                  <li key={breach.code}>{breach.code.replaceAll(".", " / ")}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">

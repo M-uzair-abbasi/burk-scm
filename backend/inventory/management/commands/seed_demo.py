@@ -8,20 +8,26 @@ several price tiers.
 """
 
 from decimal import Decimal
+from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Q
 from django.utils.text import slugify
 
 from inventory.models import Category, Product, StockMovement
 from inventory.services import record_movement
-from fulfillment.models import PackingSession, PackScan
-from logistics.models import Shipment, ShipmentEvent
-from notifications.models import Notification
-from orders.models import SalesOrder, SalesOrderLine, SyncRun
+from fulfillment.models import PackingSession
+from orders.connectors import CONNECTORS
+from orders.connectors._feed import DATA_DIR
+from orders.models import SalesOrder
 from orders.services import sync_all
-from purchasing.models import PurchaseOrder, PurchaseOrderLine
+from notifications.models import Notification, NotificationDeliveryEvent
+from operations.models import WorkItem
+from logistics.models import CourierWebhookEvent
+from purchasing.models import PurchaseOrder
 from suppliers.models import Supplier, SupplierPriceTier, SupplierProduct
 from surveillance.models import PackagingRecording
 
@@ -74,6 +80,10 @@ SUPPLY_LINKS = {
     # BRK-4001 intentionally absent — the no-supplier path.
 }
 
+DEMO_USERNAMES = ("manager", "operator")
+DEMO_SKUS = tuple(row[0] for row in PRODUCTS)
+DEMO_SUPPLIER_CODES = tuple(row[0] for row in SUPPLIERS)
+
 
 class Command(BaseCommand):
     help = "Create demo users, categories, products, suppliers and opening stock."
@@ -82,39 +92,31 @@ class Command(BaseCommand):
         parser.add_argument(
             "--reset",
             action="store_true",
-            help="Delete existing demo data first.",
+            help="Delete only the designated demo dataset before reseeding.",
+        )
+        parser.add_argument(
+            "--confirm-reset",
+            action="store_true",
+            help="Required with --reset after ALLOW_DEMO_RESET is enabled.",
         )
 
     @transaction.atomic
     def handle(self, *args, **options):
+        if not settings.DEMO_MODE_ENABLED:
+            raise CommandError("seed_demo is disabled outside an explicit demo environment.")
+
         if options["reset"]:
-            # Order matters: StockMovement, PurchaseOrderLine and PurchaseOrder
-            # all hold PROTECT/references to Product and Supplier, so they must
-            # be cleared before the rows they point at.
-            StockMovement.objects.all().delete()
-            PurchaseOrderLine.objects.all().delete()
-            PurchaseOrder.objects.all().delete()
-            # PackingSession PROTECTs its SalesOrder, so clear packing (and its
-            # Module 4 recording) first. Notification/Shipment CASCADE from
-            # SalesOrder but are cleared explicitly too, for the same visibility
-            # every other model here gets.
-            PackagingRecording.objects.all().delete()
-            PackScan.objects.all().delete()
-            PackingSession.objects.all().delete()
-            ShipmentEvent.objects.all().delete()
-            Shipment.objects.all().delete()
-            Notification.objects.all().delete()
-            SalesOrderLine.objects.all().delete()
-            SalesOrder.objects.all().delete()
-            SyncRun.objects.all().delete()
-            SupplierPriceTier.objects.all().delete()
-            SupplierProduct.objects.all().delete()
-            Product.objects.all().delete()
-            Category.objects.all().delete()
-            Supplier.objects.all().delete()
+            if not settings.ALLOW_DEMO_RESET:
+                raise CommandError(
+                    "Demo reset is disabled. Set ALLOW_DEMO_RESET=True only for "
+                    "a disposable demo environment."
+                )
+            if not options["confirm_reset"]:
+                raise CommandError("--confirm-reset is required with --reset.")
+            self._reset_demo_data()
             self.stdout.write(self.style.WARNING("Existing demo data removed."))
 
-        manager = self._user("manager", User.Role.MANAGER, staff=True)
+        manager = self._user("manager", User.Role.MANAGER)
         self._user("operator", User.Role.OPERATOR)
 
         categories = {
@@ -198,17 +200,133 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"Logins: manager / operator  (password: {DEMO_PASSWORD})")
 
-    def _user(self, username, role, staff=False):
+    def _demo_order_filter(self):
+        query = Q(pk__in=[])
+        for channel, connector_class in CONNECTORS.items():
+            connector = connector_class()
+            external_ids = []
+            for raw in connector.fetch():
+                try:
+                    external_ids.append(connector.normalize(raw).external_id)
+                except Exception:
+                    continue
+            if external_ids:
+                query |= Q(channel=channel, external_id__in=external_ids)
+        return query
+
+    def _reset_demo_data(self):
+        """Remove only deterministic demo-owned rows; unrelated rows survive.
+
+        Any unexpected PROTECT reference aborts the surrounding transaction
+        instead of broadening deletion to user-owned data.
+        """
+        demo_users = User.objects.filter(
+            username__in=DEMO_USERNAMES,
+            email__in=[f"{username}@example.invalid" for username in DEMO_USERNAMES],
+        )
+        demo_orders = SalesOrder.objects.filter(self._demo_order_filter())
+        demo_order_ids = list(demo_orders.values_list("id", flat=True))
+        demo_recording_ids = list(
+            PackagingRecording.objects.filter(session__order__in=demo_orders)
+            .values_list("id", flat=True)
+        )
+        demo_notification_ids = list(
+            Notification.objects.filter(order__in=demo_orders)
+            .values_list("id", flat=True)
+        )
+        NotificationDeliveryEvent.objects.filter(
+            notification_id__in=demo_notification_ids
+        ).delete()
+        media_paths = list(
+            PackagingRecording.objects.filter(session__order__in=demo_orders)
+            .values_list("raw_path", "compressed_path")
+        )
+
+        # WorkItem uses generic JSON identifiers rather than foreign keys, so
+        # remove only jobs whose deterministic keys belong to demo lifecycles.
+        demo_work_keys = [
+            *(f"book_shipment:{pk}" for pk in demo_order_ids),
+            *(f"process_packaging_recording:{pk}" for pk in demo_recording_ids),
+            *(f"send_notification:{pk}" for pk in demo_notification_ids),
+        ]
+        WorkItem.objects.filter(key__in=demo_work_keys).delete()
+        CourierWebhookEvent.objects.filter(
+            shipment__order__in=demo_orders
+        ).delete()
+
+        # PackingSession PROTECTs SalesOrder; its scans/recording cascade.
+        PackingSession.objects.filter(order__in=demo_orders).delete()
+        demo_orders.delete()
+
+        # A demo user's purchase/stock activity belongs to the demo dataset.
+        PurchaseOrder.objects.filter(created_by__in=demo_users).delete()
+        StockMovement.objects.filter(
+            product__sku__in=DEMO_SKUS,
+            created_by__in=demo_users,
+        ).delete()
+
+        # Supplier links and tiers are deterministic children of demo suppliers.
+        SupplierProduct.objects.filter(
+            supplier__code__in=DEMO_SUPPLIER_CODES
+        ).delete()
+        Product.objects.filter(sku__in=DEMO_SKUS).delete()
+        Category.objects.filter(
+            name__in=CATEGORIES,
+            products__isnull=True,
+        ).delete()
+        Supplier.objects.filter(code__in=DEMO_SUPPLIER_CODES).delete()
+        demo_users.delete()
+
+        transaction.on_commit(
+            lambda paths=tuple(media_paths): self._delete_demo_files(paths)
+        )
+
+    @staticmethod
+    def _delete_demo_files(media_paths):
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        for pair in media_paths:
+            for relative in pair:
+                if not relative:
+                    continue
+                candidate = (media_root / relative).resolve()
+                try:
+                    candidate.relative_to(media_root)
+                except ValueError:
+                    continue
+                if candidate.is_file():
+                    candidate.unlink()
+
+        for injected in DATA_DIR.glob("*_injected.json"):
+            if injected.is_file():
+                injected.unlink()
+
+    def _user(self, username, role):
+        demo_email = f"{username}@example.invalid"
         user, created = User.objects.get_or_create(
             username=username,
             defaults={
                 "role": role,
-                "is_staff": staff,
-                "is_superuser": staff,
-                "email": f"{username}@example.invalid",
+                "is_staff": False,
+                "is_superuser": False,
+                "email": demo_email,
             },
         )
-        if created:
-            user.set_password(DEMO_PASSWORD)
-            user.save(update_fields=["password"])
+        if not created and user.email not in {"", demo_email}:
+            raise CommandError(
+                f"Refusing to reuse non-demo account with username {username!r}."
+            )
+        user.role = role
+        user.email = demo_email
+        user.is_staff = False
+        user.is_superuser = False
+        user.set_password(DEMO_PASSWORD)
+        user.save(
+            update_fields=[
+                "role",
+                "email",
+                "is_staff",
+                "is_superuser",
+                "password",
+            ]
+        )
         return user
