@@ -53,6 +53,14 @@ def dispatch(
     rows = []
     for channel in channels:
         recipient = getattr(order, _RECIPIENT_FIELD[channel], "") or ""
+        if not recipient:
+            # The order has no contact info for this channel — e.g. Daraz's
+            # Seller Center API never exposes the buyer's email to sellers,
+            # only phone/address. Attempting delivery would only manufacture
+            # a permanent failure for a channel this order can never reach;
+            # skip it instead. latency_report() only requires channels an
+            # order actually has a recipient for.
+            continue
         idempotency_key = _business_key(order, kind, channel, event_key)
         notification, created = Notification.objects.get_or_create(
             idempotency_key=idempotency_key,
@@ -420,14 +428,26 @@ def latency_report(kind: str | None = None, *, threshold_seconds: int = 180) -> 
 
     required_missing = []
     if kind == Notification.Kind.PACKAGING_VIDEO:
-        required = set(settings.NOTIFICATION_REQUIRED_CHANNELS)
-        events: dict[tuple, set] = {}
+        configured = set(settings.NOTIFICATION_REQUIRED_CHANNELS)
+        events: dict[tuple, dict] = {}
         for row in qs:
-            events.setdefault(
-                (row.order_id, row.reference_event_at), set()
-            ).add(row.channel)
-        for (order_id, reference), present in events.items():
-            missing = sorted(required - present)
+            bucket = events.setdefault(
+                (row.order_id, row.reference_event_at),
+                {"present": set(), "order": row.order},
+            )
+            bucket["present"].add(row.channel)
+        for (order_id, reference), bucket in events.items():
+            order = bucket["order"]
+            # Only channels this order actually has a recipient for are
+            # "required" — dispatch() never creates a row for one it can't
+            # reach, so demanding it here would just reintroduce the same
+            # false alarm as a manufactured failure would have.
+            reachable = {
+                channel
+                for channel in configured
+                if (getattr(order, _RECIPIENT_FIELD[channel], "") or "")
+            }
+            missing = sorted(reachable - bucket["present"])
             if missing:
                 required_missing.append(
                     {

@@ -70,19 +70,40 @@ class DispatchTests(TestCase):
         self.assertEqual(by_channel["email"].recipient, "specific@example.invalid")
         self.assertEqual(by_channel["whatsapp"].recipient, "+923339990000")
 
-    def test_missing_recipient_fails_that_channel_without_raising(self):
-        order = make_order(email="", phone="")
+    def test_missing_recipient_skips_that_channel_without_raising(self):
+        """A channel with no recipient (e.g. a Daraz order's blank email —
+        Daraz's Seller Center API never exposes buyer emails to sellers) is
+        skipped rather than dispatched and left to fail permanently."""
+        order = make_order(email="", phone="+923001112222")
         created = dispatch(
             order,
             kind=Notification.Kind.PACKAGING_VIDEO,
             reference_event_at=timezone.now(),
             payload={"video_url": "https://example.invalid/v.mp4"},
         )
+        self.assertEqual({n.channel for n in created}, {"whatsapp"})
+
         process_due(limit=10)
         for n in created:
             n.refresh_from_db()
-            self.assertEqual(n.status, Notification.Status.FAILED)
-            self.assertTrue(n.error)
+            self.assertEqual(n.status, Notification.Status.SENT)
+
+        # The email requirement only applies to channels this order can
+        # actually reach — it has no email, so it isn't "missing" one.
+        report = latency_report(Notification.Kind.PACKAGING_VIDEO)
+        self.assertEqual(report["missing_required_channels"], [])
+        self.assertTrue(report["ok"])
+
+    def test_dispatch_with_no_reachable_channels_creates_nothing(self):
+        order = make_order(email="", phone="")
+        created = dispatch(
+            order,
+            kind=Notification.Kind.REVIEW_REQUEST,
+            reference_event_at=timezone.now(),
+            payload={"review_link": "x"},
+        )
+        self.assertEqual(created, [])
+        self.assertEqual(Notification.objects.filter(order=order).count(), 0)
 
     def test_future_scheduled_for_does_not_send_immediately(self):
         order = make_order()
@@ -141,14 +162,21 @@ class LatencyReportTests(TestCase):
         self.assertEqual(report.get("evidence_count"), 0)
 
     def test_report_fails_when_required_channels_failed(self):
-        order = make_order(email="", phone="")
+        # A genuine provider failure on both reachable channels — distinct
+        # from a missing recipient, which dispatch() now skips rather than
+        # ever letting fail.
+        order = make_order()
         dispatch(
             order,
             kind=Notification.Kind.PACKAGING_VIDEO,
             reference_event_at=timezone.now(),
             payload={"video_url": "x"},
+            max_attempts=1,
         )
-        process_due(limit=10)
+        channel = Mock()
+        channel.send.side_effect = RuntimeError("provider unreachable")
+        with patch("notifications.services.get_channel", return_value=channel):
+            process_due(limit=10)
 
         report = latency_report(
             Notification.Kind.PACKAGING_VIDEO,
