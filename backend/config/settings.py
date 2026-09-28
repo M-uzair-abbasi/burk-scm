@@ -160,6 +160,26 @@ DATABASES = {
     ),
 }
 
+# Postgres is the target database; SQLite is only ever a convenience for
+# running the stack locally without Docker. SQLite allows a single writer at
+# a time, so the background worker and the web process collide the moment
+# they both write -- ingestion records then fail with "database is locked".
+# WAL lets a writer and readers coexist, and busy_timeout makes a second
+# writer wait its turn instead of failing instantly. Applied only when the
+# engine really is SQLite, so Postgres deployments are untouched.
+if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":
+    DATABASES["default"].setdefault("OPTIONS", {})
+    DATABASES["default"]["OPTIONS"].update(
+        {
+            "transaction_mode": "IMMEDIATE",
+            "init_command": (
+                "PRAGMA journal_mode=WAL;"
+                "PRAGMA synchronous=NORMAL;"
+                "PRAGMA busy_timeout=10000;"
+            ),
+        }
+    )
+
 # Must be set before the first migrate. Swapping it afterwards is not
 # practically recoverable without dropping the database.
 AUTH_USER_MODEL = "accounts.User"

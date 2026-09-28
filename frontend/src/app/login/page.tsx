@@ -2,9 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Bell, ScanLine, ShoppingCart, Truck } from "lucide-react";
 
 import { useAuth } from "@/components/AuthProvider";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { ApiError } from "@/lib/api";
+
+const LOOP = [
+  { icon: ShoppingCart, label: "Orders arrive" },
+  { icon: ScanLine, label: "Items verified" },
+  { icon: Bell, label: "Customer notified" },
+  { icon: Truck, label: "Courier booked" },
+];
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -28,83 +38,157 @@ export default function LoginPage() {
       router.replace("/dashboard");
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Something went wrong. Try again.",
+        err instanceof ApiError
+          ? err.message
+          : "Something went wrong. Try again.",
       );
       setSubmitting(false);
     }
   }
 
+  /** Fills the form for a demo account — evaluators should not have to type. */
+  function fillDemo(name: string) {
+    setUsername(name);
+    setPassword("burkdemo123");
+    setError(null);
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Burk.pk SCM-OVS</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            Supply Chain &amp; Order Verification
+    <div className="flex min-h-screen flex-col lg:flex-row">
+      {/* Explainer half — so someone meeting this system cold knows what it is
+          before they are asked for credentials. */}
+      <section className="flex flex-col justify-center gap-8 bg-instrument px-8 py-12 text-instrument-text lg:w-[46%] lg:px-14">
+        <div className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            className="flex size-8 items-center justify-center rounded-md bg-instrument-raised text-xs font-bold"
+          >
+            BK
+          </span>
+          <div className="leading-tight">
+            <div className="text-sm font-semibold">Burk.pk SCM-OVS</div>
+            <div className="eyebrow text-instrument-muted">
+              Warehouse console
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h1 className="text-2xl font-semibold leading-tight tracking-tight lg:text-3xl">
+            Supply chain &amp; smart order verification
+          </h1>
+          <p className="mt-3 max-w-md text-sm leading-relaxed text-instrument-muted">
+            One loop, start to finish: orders are pulled from every sales
+            channel, each item is barcode-checked as it is packed, and the
+            sealed parcel is filmed, the customer messaged and a courier booked
+            without anyone typing an airway bill.
           </p>
         </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="space-y-4 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
-        >
-          {error && (
-            <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-              {error}
-            </div>
-          )}
+        <ul className="flex flex-col gap-3">
+          {LOOP.map((step, i) => {
+            const Icon = step.icon;
+            return (
+              <li key={step.label} className="flex items-center gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-instrument-border text-instrument-muted">
+                  <Icon aria-hidden className="size-3.5" />
+                </span>
+                <span className="text-sm text-instrument-text">
+                  {step.label}
+                </span>
+                {i < LOOP.length - 1 ? (
+                  <span aria-hidden className="text-instrument-border">
+                    →
+                  </span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
 
-          <div>
-            <label
-              htmlFor="username"
-              className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-            >
-              Username
-            </label>
-            <input
-              id="username"
-              type="text"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100 dark:focus:ring-zinc-100"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="password"
-              className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100 dark:focus:ring-zinc-100"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            {submitting ? "Signing in…" : "Sign in"}
-          </button>
-
-          <p className="text-center text-xs text-zinc-400">
-            Demo: <span className="font-mono">manager</span> or{" "}
-            <span className="font-mono">operator</span> ·{" "}
-            <span className="font-mono">burkdemo123</span>
+      {/* Form half */}
+      <section className="flex flex-1 items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          <h2 className="text-lg font-semibold tracking-tight text-primary">
+            Sign in
+          </h2>
+          <p className="mt-1 text-sm text-secondary">
+            Use a warehouse account to open the console.
           </p>
-        </form>
-      </div>
+
+          <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
+            {error ? (
+              <div
+                role="alert"
+                className="rounded-lg border border-critical/30 bg-critical-soft px-3 py-2 text-sm text-critical-text"
+              >
+                {error}
+              </div>
+            ) : null}
+
+            <div>
+              <label
+                htmlFor="username"
+                className="eyebrow mb-1.5 block text-muted"
+              >
+                Username
+              </label>
+              <Input
+                id="username"
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="password"
+                className="eyebrow mb-1.5 block text-muted"
+              >
+                Password
+              </label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={submitting}
+              className="w-full"
+            >
+              {submitting ? "Signing in…" : "Sign in"}
+            </Button>
+          </form>
+
+          <div className="mt-8 rounded-lg border border-subtle bg-raised p-4">
+            <div className="eyebrow text-muted">Demo accounts</div>
+            <p className="mt-1.5 text-xs leading-relaxed text-secondary">
+              Pick one to fill the form. A manager sees everything; an operator
+              sees packing and stock.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <Button size="sm" variant="secondary" onClick={() => fillDemo("manager")}>
+                manager
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => fillDemo("operator")}>
+                operator
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

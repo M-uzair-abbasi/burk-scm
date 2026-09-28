@@ -3,9 +3,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import {
+  ArrowLeft,
+  BadgeCheck,
+  Bell,
+  Check,
+  CircleAlert,
+  ScanLine,
+  Truck,
+  Video,
+  X,
+} from "lucide-react";
 
-import { ChannelBadge } from "@/components/ChannelBadge";
 import { useAuth } from "@/components/AuthProvider";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { Meter } from "@/components/ui/Meter";
+import { Panel } from "@/components/ui/Panel";
+import { ChannelTag, LookPill, StatusPill } from "@/components/ui/StatusPill";
+import { Term } from "@/components/ui/Tooltip";
+import { cn } from "@/components/ui/cn";
+import {
+  NOTIFICATION_STATUS,
+  RECORDING_STATUS,
+  SCAN_RESULT,
+  SHIPMENT_STATUS,
+} from "@/components/ui/status";
 import { ApiError } from "@/lib/api";
 import { packing } from "@/lib/resources";
 import type { PackLine, PackSession, ScanResult } from "@/lib/types";
@@ -66,6 +88,32 @@ function hasActiveAutomation(session: PackSession): boolean {
   return (
     session.status === "completed" &&
     (recordingActive || shipmentActive || notificationActive)
+  );
+}
+
+/** One row of the post-seal automation chain. */
+function AutomationStep({
+  icon: Icon,
+  title,
+  blurb,
+  children,
+}: {
+  icon: typeof Video;
+  title: string;
+  blurb: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-3.5 px-5 py-4">
+      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-sunken text-muted">
+        <Icon aria-hidden className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold text-primary">{title}</div>
+        <p className="mt-0.5 text-xs leading-relaxed text-secondary">{blurb}</p>
+        <div className="mt-2.5">{children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -162,7 +210,9 @@ export default function PackingStationPage() {
     try {
       setSession(await packing.confirmLine(session.id, lineId));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not confirm line.");
+      setError(
+        err instanceof ApiError ? err.message : "Could not confirm line.",
+      );
     }
     focusInput();
   }
@@ -178,7 +228,9 @@ export default function PackingStationPage() {
       // work proceeds in the worker and the bounded poll reflects that state.
       setSession(await packing.complete(session.id));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not complete pack.");
+      setError(
+        err instanceof ApiError ? err.message : "Could not complete pack.",
+      );
     } finally {
       setBusy(false);
     }
@@ -186,346 +238,406 @@ export default function PackingStationPage() {
 
   function simulateCorrect() {
     if (!session) return;
-    const next = session.lines.find((l) => l.has_barcode && l.scanned < l.required);
+    const next = session.lines.find(
+      (l) => l.has_barcode && l.scanned < l.required,
+    );
     if (next?.barcode) submitScan(next.barcode);
   }
 
-  if (loading) return <p className="text-sm text-zinc-500">Loading…</p>;
-  if (!session) return <p className="text-sm text-zinc-500">Session not found.</p>;
+  if (loading) {
+    return (
+      <p className="py-12 text-center text-sm text-secondary">
+        Opening the station…
+      </p>
+    );
+  }
+  if (!session) {
+    return (
+      <div className="py-12 text-center">
+        <p className="text-sm text-secondary">
+          That packing session could not be found.
+        </p>
+        <ButtonLink href="/packing" variant="secondary" className="mt-4">
+          Back to the queue
+        </ButtonLink>
+      </div>
+    );
+  }
 
   const done = session.status === "completed";
+  const totalRequired = session.lines.reduce((a, l) => a + l.required, 0);
+  const totalScanned = session.lines.reduce(
+    (a, l) => a + Math.min(l.scanned, l.required),
+    0,
+  );
 
   return (
-    <div className="relative space-y-5">
-      {/* Full-screen mismatch flash */}
-      {flash === "error" && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-red-600/85">
+    <div className="relative flex flex-col gap-5">
+      {/* Full-screen mismatch flash — deliberately impossible to miss. */}
+      {flash === "error" ? (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-critical/90">
           <div className="text-center text-white">
-            <div className="text-6xl font-black tracking-tight">✕ WRONG ITEM</div>
-            <div className="mt-3 text-xl">
+            <X aria-hidden className="mx-auto size-20" strokeWidth={3} />
+            <div className="mt-2 text-5xl font-black tracking-tight">
+              WRONG ITEM
+            </div>
+            <div className="mt-3 text-lg">
               This item is not on this order — do not pack it.
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
-      <Link
-        href="/packing"
-        className="inline-block text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-      >
-        ← Back to queue
-      </Link>
+      <div>
+        <Link
+          href="/packing"
+          className="inline-flex items-center gap-1.5 text-sm text-secondary transition-colors duration-150 hover:text-primary"
+        >
+          <ArrowLeft aria-hidden className="size-3.5" />
+          Back to queue
+        </Link>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="font-mono text-lg font-semibold">{session.order.reference}</h2>
-        <ChannelBadge
-          channel={session.order.channel}
-          label={session.order.channel_display}
-        />
-        <span className="text-sm text-zinc-500">
-          {session.order.customer_name || "—"} · {session.order.external_id}
-        </span>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="tabular font-mono text-xl font-semibold tracking-tight text-primary">
+            {session.order.reference}
+          </h1>
+          <ChannelTag
+            channel={session.order.channel}
+            label={session.order.channel_display}
+          />
+          <span className="text-sm text-secondary">
+            {session.order.customer_name || "—"}
+          </span>
+          <span className="tabular font-mono text-xs text-muted">
+            {session.order.external_id}
+          </span>
+        </div>
       </div>
 
       {done ? (
-        <div className="space-y-4">
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-8 text-center dark:border-emerald-900 dark:bg-emerald-950">
-            <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
-              ✓ Packed
-            </div>
-            <p className="mt-1 text-sm text-emerald-700/80 dark:text-emerald-300/80">
-              Every item verified. Stock decremented and the order marked Packed.
-            </p>
-          </div>
-
-          {/* Module 4: packaging video + customer dispatch */}
-          <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Customer transparency — packaging video
-            </h3>
-
-            {!session.recording ? (
-              <p className="text-sm text-zinc-500">Recording state unavailable.</p>
-            ) : session.recording.status === "failed" ? (
-              <p className="text-sm text-red-600 dark:text-red-400">
-                Recording failed
-                {user?.is_manager && session.recording.error
-                  ? `: ${session.recording.error}`
-                  : ". Ask a manager to review the worker failure."}
+        <>
+          <section className="overflow-hidden rounded-xl border border-success/40 bg-raised shadow-card">
+            <div className="flex flex-col items-center px-5 py-8 text-center">
+              <span className="flex size-12 items-center justify-center rounded-full bg-success text-white">
+                <Check aria-hidden className="size-6" strokeWidth={3} />
+              </span>
+              <h2 className="mt-3 text-lg font-semibold text-primary">
+                Packed and sealed
+              </h2>
+              <p className="mt-1 max-w-md text-sm leading-relaxed text-secondary">
+                Every item was barcode-verified. Stock has been decremented and
+                the order marked Packed. Everything below now runs on its own.
               </p>
-            ) : session.recording.status === "ready" ? (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                    ✓ Video ready
-                  </span>
-                  <span className="text-zinc-500">
-                    {session.recording.duration_seconds?.toFixed(0)}s ·{" "}
-                    {session.recording.compressed_size_bytes
-                      ? `${Math.round(session.recording.compressed_size_bytes / 1024)} KB`
-                      : "—"}
-                  </span>
-                </div>
-                {session.recording.video_url && (
-                  <video
-                    controls
-                    className="w-full max-w-xs rounded-lg border border-zinc-200 dark:border-zinc-800"
-                    src={session.recording.video_url}
-                  />
-                )}
-              </div>
-            ) : (
-              <div className="text-sm">
-                <span className="font-medium text-amber-700 dark:text-amber-300">
-                  {session.recording.status_display}
-                </span>
-                <span className="ml-2 text-zinc-500">
-                  attempt {session.recording.processing_attempts}
-                </span>
-                {user?.is_manager && session.recording.error && (
-                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">
-                    {session.recording.error}
-                  </p>
-                )}
-              </div>
-            )}
+            </div>
+          </section>
 
-            {session.video_notifications.length > 0 && (
-              <div className="mt-4 space-y-1.5 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-                {session.video_notifications.map((n) => (
-                  <div key={n.id} className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-600 dark:text-zinc-300">
-                      {n.channel_display} → {n.recipient || "—"}
+          <Panel
+            eyebrow="Runs automatically after sealing"
+            title="What the system is doing for this parcel"
+            icon={BadgeCheck}
+            bodyClassName="divide-y divide-subtle"
+          >
+            <AutomationStep
+              icon={Video}
+              title="Packaging video"
+              blurb="Proof of what went into the box, filmed and compressed for the customer."
+            >
+              {!session.recording ? (
+                <p className="text-sm text-secondary">
+                  Recording state unavailable.
+                </p>
+              ) : session.recording.status === "ready" ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <LookPill look={RECORDING_STATUS.ready}>
+                      Video ready
+                    </LookPill>
+                    <span className="tabular font-mono text-xs text-secondary">
+                      {session.recording.duration_seconds?.toFixed(0)}s ·{" "}
+                      {session.recording.compressed_size_bytes
+                        ? `${Math.round(session.recording.compressed_size_bytes / 1024)} KB`
+                        : "—"}
                     </span>
-                    <span
-                      className={
-                        n.status === "sent"
-                          ? "font-medium text-emerald-600 dark:text-emerald-400"
-                          : n.status === "failed"
-                            ? "font-medium text-red-600 dark:text-red-400"
-                            : "font-medium text-amber-600 dark:text-amber-400"
-                      }
-                    >
-                      {n.status === "sent" && n.latency_seconds !== null
-                        ? `Sent in ${n.latency_seconds.toFixed(1)}s`
-                        : n.status_display}
-                    </span>
-                    {user?.is_manager && n.error && (
-                      <span className="ml-2 text-xs text-red-600 dark:text-red-400">
-                        {n.error}
-                      </span>
-                    )}
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Module 5: durable courier booking, right alongside the video panel */}
-          {(session.shipment || session.shipment_job) && (
-            <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Shipment
-              </h3>
-              {session.shipment ? (
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                    ✓ {session.shipment.status_display}
-                  </span>
-                  <span className="font-medium">
-                    {session.shipment.courier_display}
-                  </span>
-                  <span className="font-mono text-zinc-500">
-                    {session.shipment.tracking_number}
-                  </span>
+                  {session.recording.video_url ? (
+                    <video
+                      controls
+                      className="w-full max-w-xs rounded-lg border border-subtle"
+                      src={session.recording.video_url}
+                    />
+                  ) : null}
                 </div>
               ) : (
-                <div className="text-sm">
-                  <span
-                    className={
-                      session.shipment_job?.status === "failed"
-                        ? "font-medium text-red-600 dark:text-red-400"
-                        : "font-medium text-amber-700 dark:text-amber-300"
-                    }
-                  >
-                    {session.shipment_job?.status === "retry"
-                      ? "Courier booking retry scheduled"
-                      : session.shipment_job?.status === "failed"
-                        ? "Courier booking failed"
-                        : session.shipment_job?.status === "processing"
-                          ? "Booking courier…"
-                          : "Courier booking queued"}
+                <div className="flex flex-wrap items-center gap-2">
+                  <LookPill look={RECORDING_STATUS[session.recording.status]}>
+                    {session.recording.status_display}
+                  </LookPill>
+                  <span className="text-xs text-secondary">
+                    attempt {session.recording.processing_attempts}
                   </span>
-                  {user?.is_manager && session.shipment_job?.error && (
-                    <p className="mt-2 text-xs text-red-600 dark:text-red-400">
-                      {session.shipment_job.error}
+                  {user?.is_manager && session.recording.error ? (
+                    <p className="w-full text-xs text-critical-text">
+                      {session.recording.error}
                     </p>
-                  )}
+                  ) : null}
                 </div>
               )}
-              <p className="mt-2 text-xs text-zinc-500">
-                Booking and tracking notifications are durable worker jobs; no
-                manual airway-bill entry is required.
-              </p>
-            </div>
-          )}
+            </AutomationStep>
 
-          {pollStopped && hasActiveAutomation(session) && (
-            <button
-              onClick={async () => {
-                pollAttempts.current = 0;
-                setPollStopped(false);
-                setPollCycle((cycle) => cycle + 1);
-                setSession(await packing.get(session.id));
-              }}
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
-              Refresh automation status
-            </button>
-          )}
+            {session.video_notifications.length > 0 ? (
+              <AutomationStep
+                icon={Bell}
+                title="Customer notified"
+                blurb="The video link goes out over WhatsApp and email within seconds of sealing."
+              >
+                <ul className="flex flex-col gap-1.5">
+                  {session.video_notifications.map((n) => (
+                    <li
+                      key={n.id}
+                      className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                    >
+                      <span className="text-secondary">
+                        {n.channel_display} → {n.recipient || "—"}
+                      </span>
+                      <LookPill look={NOTIFICATION_STATUS[n.status]}>
+                        {n.status === "sent" && n.latency_seconds !== null
+                          ? `Sent in ${n.latency_seconds.toFixed(1)}s`
+                          : n.status_display}
+                      </LookPill>
+                      {user?.is_manager && n.error ? (
+                        <span className="w-full text-xs text-critical-text">
+                          {n.error}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </AutomationStep>
+            ) : null}
 
-          <Link
-            href="/packing"
-            className="inline-block rounded-md bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            Back to queue
-          </Link>
-        </div>
+            {session.shipment || session.shipment_job ? (
+              <AutomationStep
+                icon={Truck}
+                title="Courier booked"
+                blurb="A durable job books the courier and returns an airway bill — no manual entry."
+              >
+                {session.shipment ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <LookPill look={SHIPMENT_STATUS[session.shipment.status]}>
+                      {session.shipment.status_display}
+                    </LookPill>
+                    <span className="text-sm font-medium text-primary">
+                      {session.shipment.courier_display}
+                    </span>
+                    <Term definition="The courier's tracking number for this parcel, also called an airway bill.">
+                      <span className="tabular font-mono text-xs text-secondary">
+                        {session.shipment.tracking_number}
+                      </span>
+                    </Term>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusPill
+                      tone={
+                        session.shipment_job?.status === "failed"
+                          ? "critical"
+                          : "warning"
+                      }
+                      variant={
+                        session.shipment_job?.status === "failed"
+                          ? "solid"
+                          : "outline"
+                      }
+                    >
+                      {session.shipment_job?.status === "retry"
+                        ? "Retry scheduled"
+                        : session.shipment_job?.status === "failed"
+                          ? "Booking failed"
+                          : session.shipment_job?.status === "processing"
+                            ? "Booking courier…"
+                            : "Queued"}
+                    </StatusPill>
+                    {user?.is_manager && session.shipment_job?.error ? (
+                      <p className="w-full text-xs text-critical-text">
+                        {session.shipment_job.error}
+                      </p>
+                    ) : null}
+                  </div>
+                )}
+              </AutomationStep>
+            ) : null}
+          </Panel>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <ButtonLink href="/packing" variant="primary">
+              Back to queue
+            </ButtonLink>
+            {pollStopped && hasActiveAutomation(session) ? (
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  pollAttempts.current = 0;
+                  setPollStopped(false);
+                  setPollCycle((cycle) => cycle + 1);
+                  setSession(await packing.get(session.id));
+                }}
+              >
+                Refresh automation status
+              </Button>
+            ) : null}
+          </div>
+        </>
       ) : (
         <>
-          {/* Scan input */}
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <Panel
+            eyebrow="Step 1 of 2"
+            title="Scan every item in the parcel"
+            icon={ScanLine}
+            bodyClassName="p-4"
+          >
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 submitScan(input);
               }}
             >
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-zinc-500">
+              <label
+                htmlFor="barcode"
+                className="eyebrow mb-1.5 block text-muted"
+              >
                 Scan item barcode
               </label>
               <input
+                id="barcode"
                 ref={inputRef}
                 autoFocus
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Scan or type a barcode, then Enter…"
-                className="w-full rounded-md border border-zinc-300 bg-white px-4 py-3 font-mono text-lg outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100"
+                placeholder="Scan or type a barcode, then press Enter…"
+                className="tabular w-full rounded-lg border border-strong bg-raised px-4 py-3 font-mono text-lg text-primary outline-none transition-colors duration-150 placeholder:font-sans placeholder:text-base placeholder:text-muted hover:border-accent/50"
               />
             </form>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-zinc-400">Demo aids:</span>
-              <button
-                onClick={simulateCorrect}
-                className="rounded-md border border-zinc-300 px-2.5 py-1 font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                ▶ Simulate correct scan
-              </button>
-              <button
-                onClick={() => submitScan("0000000000000")}
-                className="rounded-md border border-red-300 px-2.5 py-1 font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950"
-              >
-                ✕ Simulate wrong item
-              </button>
-            </div>
-          </div>
 
-          {error && (
-            <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted">Demo aids:</span>
+              <Button size="sm" variant="secondary" onClick={simulateCorrect}>
+                Simulate correct scan
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => submitScan("0000000000000")}
+                className="border-critical/40 text-critical-text hover:bg-critical-soft"
+              >
+                Simulate wrong item
+              </Button>
+            </div>
+          </Panel>
+
+          {error ? (
+            <div className="flex items-center gap-2 rounded-lg border border-critical/30 bg-critical-soft px-4 py-2.5 text-sm text-critical-text">
+              <CircleAlert aria-hidden className="size-4 shrink-0" />
               {error}
             </div>
-          )}
+          ) : null}
 
-          {/* Packing checklist */}
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="border-b border-zinc-200 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-              Packing list
-            </div>
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {session.lines.map((l) => (
-                <li
-                  key={l.line_id}
-                  className={`flex items-center justify-between gap-3 px-4 py-3 ${
-                    l.complete ? "bg-emerald-50/60 dark:bg-emerald-950/30" : ""
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${
-                        l.complete
-                          ? "bg-emerald-500 text-white"
-                          : "border border-zinc-300 text-transparent dark:border-zinc-700"
-                      }`}
-                    >
-                      ✓
-                    </span>
-                    <div>
-                      <div className="font-medium">{l.product_name}</div>
-                      <div className="font-mono text-xs text-zinc-500">
-                        {l.sku}
-                        {l.barcode ? ` · ${l.barcode}` : " · no barcode"}
-                      </div>
+          <Panel
+            eyebrow="Packing list"
+            title={`${totalScanned} of ${totalRequired} items verified`}
+            actions={
+              <div className="w-32">
+                <Meter
+                  value={totalScanned}
+                  max={Math.max(totalRequired, 1)}
+                  tone={session.complete ? "success" : "warning"}
+                  label="Items verified"
+                />
+              </div>
+            }
+            bodyClassName="divide-y divide-subtle"
+          >
+            {session.lines.map((l) => (
+              <div
+                key={l.line_id}
+                className={cn(
+                  "flex items-center justify-between gap-3 px-5 py-3",
+                  l.complete && "bg-success-soft/40",
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={cn(
+                      "flex size-6 shrink-0 items-center justify-center rounded-full",
+                      l.complete
+                        ? "bg-success text-white"
+                        : "border border-strong text-transparent",
+                    )}
+                  >
+                    <Check aria-hidden className="size-3.5" strokeWidth={3} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-primary">
+                      {l.product_name}
+                    </div>
+                    <div className="tabular font-mono text-xs text-muted">
+                      {l.sku}
+                      {l.barcode ? ` · ${l.barcode}` : " · no barcode"}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="tabular-nums text-sm font-semibold">
-                      {l.scanned}/{l.required}
-                    </span>
-                    {!l.has_barcode && !l.complete && (
-                      <button
-                        onClick={() => confirmLine(l.line_id)}
-                        className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                      >
-                        Confirm manually
-                      </button>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className="tabular font-mono text-sm font-semibold text-primary">
+                    {l.scanned}/{l.required}
+                  </span>
+                  {!l.has_barcode && !l.complete ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => confirmLine(l.line_id)}
+                    >
+                      Confirm manually
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </Panel>
 
-          {/* Complete */}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-zinc-500">
+          <Panel
+            eyebrow="Step 2 of 2"
+            title="Seal the parcel"
+            bodyClassName="flex flex-wrap items-center justify-between gap-3 p-5"
+          >
+            <p className="text-sm text-secondary">
               {session.complete
-                ? "All items verified."
-                : "Scan every item to enable completion."}
+                ? "All items verified — you can seal and complete this pack."
+                : "Completion unlocks once every item on the list has been scanned."}
             </p>
-            <button
+            <Button
               disabled={!session.complete || busy}
               onClick={onComplete}
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              variant="primary"
+              size="lg"
             >
               {busy ? "Completing…" : "Complete pack"}
-            </button>
-          </div>
+            </Button>
+          </Panel>
 
-          {/* Scan history */}
-          {session.recent_scans.length > 0 && (
-            <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Recent scans
-              </div>
-              <div className="flex flex-wrap gap-2">
+          {session.recent_scans.length > 0 ? (
+            <Panel eyebrow="Audit trail" title="Recent scans" bodyClassName="p-4">
+              <div className="flex flex-wrap gap-1.5">
                 {session.recent_scans.map((s) => (
-                  <span
+                  <LookPill
                     key={s.id}
-                    title={s.result_display}
-                    className={`rounded-md px-2 py-1 font-mono text-xs ${
-                      s.result === "ok"
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                        : s.result === "overscan"
-                          ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                          : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                    }`}
+                    look={SCAN_RESULT[s.result]}
+                    className="tabular font-mono"
                   >
                     {s.manual ? "(manual)" : s.barcode || "—"} · {s.result}
-                  </span>
+                  </LookPill>
                 ))}
               </div>
-            </div>
-          )}
+            </Panel>
+          ) : null}
         </>
       )}
     </div>

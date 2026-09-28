@@ -2,13 +2,14 @@ from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import IntegrityError, connections, transaction
+from django.db import IntegrityError, connection, connections, transaction
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -480,6 +481,7 @@ class BarcodeTests(TestCase):
         self.assertIsNone(product.barcode)
 
 
+@skipUnless(connection.vendor == "postgresql", "requires PostgreSQL row locking")
 class ConcurrentMovementTests(TransactionTestCase):
     """select_for_update must serialise concurrent writers.
 

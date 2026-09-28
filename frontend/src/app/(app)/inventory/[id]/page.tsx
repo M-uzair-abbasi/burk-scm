@@ -1,12 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { ArrowLeft, History, SlidersHorizontal, TriangleAlert } from "lucide-react";
 
-import { StockStatusPill } from "@/components/StockStatusPill";
 import { ReorderModal } from "@/components/ReorderModal";
 import { useAuth } from "@/components/AuthProvider";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Input } from "@/components/ui/Input";
+import { Meter } from "@/components/ui/Meter";
+import { Panel } from "@/components/ui/Panel";
+import { Select } from "@/components/ui/Select";
+import { StatusPill } from "@/components/ui/StatusPill";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
+import { Term } from "@/components/ui/Tooltip";
+import { cn } from "@/components/ui/cn";
+import { stockLabel, stockTone } from "@/components/ui/status";
 import { ApiError } from "@/lib/api";
 import { movements as movementsApi, products } from "@/lib/resources";
 import { formatDateTime, formatPKR } from "@/lib/format";
@@ -29,6 +40,7 @@ export default function ProductDetailPage() {
   const [product, setProduct] = useState<Product | null>(null);
   const [ledger, setLedger] = useState<StockMovement[]>([]);
   const [notFound, setNotFound] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
 
   const [delta, setDelta] = useState("");
   const [reason, setReason] = useState("adjustment");
@@ -37,18 +49,21 @@ export default function ProductDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    let alive = true;
     Promise.all([products.get(productId), movementsApi.list(productId)])
       .then(([p, m]) => {
+        if (!alive) return;
         setProduct(p);
         setLedger(m.results);
       })
-      .catch(() => setNotFound(true));
-  }, [productId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+      .catch(() => {
+        if (alive) setNotFound(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [productId, reloadToken]);
 
   async function onAdjust(e: React.FormEvent) {
     e.preventDefault();
@@ -70,200 +85,271 @@ export default function ProductDetailPage() {
       setDelta("");
       setNote("");
       setAllowNegative(false);
-      load();
+      setReloadToken((t) => t + 1);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not record the movement.");
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not record the movement.",
+      );
     } finally {
       setSaving(false);
     }
   }
 
   if (notFound) {
-    return <p className="text-sm text-red-600">Product not found.</p>;
+    return (
+      <div className="py-12 text-center">
+        <p className="text-sm text-secondary">That product could not be found.</p>
+        <ButtonLink href="/inventory" variant="secondary" className="mt-4">
+          Back to inventory
+        </ButtonLink>
+      </div>
+    );
   }
   if (!product) {
-    return <p className="text-sm text-zinc-500">Loading…</p>;
+    return <p className="py-12 text-center text-sm text-secondary">Loading…</p>;
   }
 
-  return (
-    <div className="space-y-6">
-      <Link href="/inventory" className="text-sm text-zinc-500 hover:underline">
-        ← Back to inventory
-      </Link>
+  const tone = stockTone(product.quantity_on_hand, product.safety_stock);
 
-      {/* Header */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold">{product.name}</h2>
-              <StockStatusPill product={product} />
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <Link
+          href="/inventory"
+          className="inline-flex items-center gap-1.5 text-sm text-secondary transition-colors duration-150 hover:text-primary"
+        >
+          <ArrowLeft aria-hidden className="size-3.5" />
+          Back to inventory
+        </Link>
+      </div>
+
+      <Panel bodyClassName="p-5">
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-xl font-semibold tracking-tight text-primary">
+                {product.name}
+              </h1>
+              <StatusPill
+                tone={tone}
+                variant={tone === "critical" ? "solid" : "soft"}
+              >
+                {stockLabel(product.quantity_on_hand, product.safety_stock)}
+              </StatusPill>
             </div>
-            <div className="mt-1 font-mono text-sm text-zinc-500">
+            <div className="tabular mt-1 font-mono text-sm text-muted">
               {product.sku}
-              {product.barcode ? ` · ${product.barcode}` : ""}
+              {product.barcode ? ` · ${product.barcode}` : " · no barcode"}
             </div>
           </div>
+
           <div className="text-right">
-            <div className="text-3xl font-semibold">{product.quantity_on_hand}</div>
-            <div className="text-xs text-zinc-500">on hand ({product.unit_display})</div>
-            {user?.is_manager && (
-              <button
+            <div
+              className={cn(
+                "tabular text-3xl font-semibold leading-none",
+                tone === "critical"
+                  ? "text-critical"
+                  : tone === "warning"
+                    ? "text-warning"
+                    : "text-primary",
+              )}
+            >
+              {product.quantity_on_hand}
+            </div>
+            <div className="mt-1 text-xs text-muted">
+              on hand ({product.unit_display})
+            </div>
+            <div className="mt-2 w-32">
+              <Meter
+                value={product.quantity_on_hand}
+                max={Math.max(product.safety_stock, 1)}
+                tone={tone}
+                label="Stock against safety level"
+              />
+            </div>
+            {user?.is_manager ? (
+              <Button
+                size="sm"
+                variant="primary"
+                className="mt-3"
                 onClick={() => setShowReorder(true)}
-                className="mt-3 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-500"
               >
                 Reorder
-              </button>
-            )}
+              </Button>
+            ) : null}
           </div>
         </div>
 
-        <dl className="mt-5 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+        <dl className="mt-6 grid grid-cols-2 gap-5 border-t border-subtle pt-5 sm:grid-cols-4">
           <div>
-            <dt className="text-zinc-500">Category</dt>
-            <dd className="font-medium">{product.category_name ?? "—"}</dd>
+            <dt className="eyebrow text-muted">Category</dt>
+            <dd className="mt-1.5 text-sm font-medium text-primary">
+              {product.category_name ?? "—"}
+            </dd>
           </div>
           <div>
-            <dt className="text-zinc-500">Safety stock</dt>
-            <dd className="font-medium">{product.safety_stock}</dd>
+            <dt className="eyebrow text-muted">
+              <Term definition="The level you never want stock to fall under. Reaching it flags the product for reorder.">
+                Safety stock
+              </Term>
+            </dt>
+            <dd className="tabular mt-1.5 text-sm font-medium text-primary">
+              {product.safety_stock}
+            </dd>
           </div>
           <div>
-            <dt className="text-zinc-500">Reorder qty</dt>
-            <dd className="font-medium">{product.reorder_quantity}</dd>
+            <dt className="eyebrow text-muted">Reorder qty</dt>
+            <dd className="tabular mt-1.5 text-sm font-medium text-primary">
+              {product.reorder_quantity}
+            </dd>
           </div>
           <div>
-            <dt className="text-zinc-500">Cost price</dt>
-            <dd className="font-medium">{formatPKR(product.cost_price)}</dd>
+            <dt className="eyebrow text-muted">Cost price</dt>
+            <dd className="tabular mt-1.5 text-sm font-medium text-primary">
+              {formatPKR(product.cost_price)}
+            </dd>
           </div>
         </dl>
-      </div>
+      </Panel>
 
-      {/* Adjust-stock form */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
-        <h3 className="mb-4 text-sm font-semibold">Adjust stock</h3>
-        {error && (
-          <div className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+      <Panel
+        eyebrow="Correction"
+        title="Adjust stock"
+        description="Packing and receiving move stock on their own — use this only to correct a count."
+        icon={SlidersHorizontal}
+        bodyClassName="p-5"
+      >
+        {error ? (
+          <div className="mb-4 flex items-center gap-2 rounded-lg border border-critical/30 bg-critical-soft px-3 py-2 text-sm text-critical-text">
+            <TriangleAlert aria-hidden className="size-4 shrink-0" />
             {error}
           </div>
-        )}
+        ) : null}
+
         <form onSubmit={onAdjust} className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="mb-1 block text-xs text-zinc-500">Quantity change</label>
-            <input
+            <label htmlFor="delta" className="eyebrow mb-1.5 block text-muted">
+              Quantity change
+            </label>
+            <Input
+              id="delta"
               type="number"
               value={delta}
               onChange={(e) => setDelta(e.target.value)}
-              placeholder="e.g. -5 or 20"
-              className="w-32 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950"
+              placeholder="-5 or 20"
+              className="tabular w-32 font-mono"
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-zinc-500">Reason</label>
-            <select
+            <span className="eyebrow mb-1.5 block text-muted">Reason</span>
+            <Select
               value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950"
-            >
-              {REASONS.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
+              onValueChange={setReason}
+              options={REASONS}
+              ariaLabel="Reason for adjustment"
+            />
           </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs text-zinc-500">
+          <div className="min-w-48 flex-1">
+            <label htmlFor="note" className="eyebrow mb-1.5 block text-muted">
               Note{allowNegative ? " (required for override)" : " (optional)"}
             </label>
-            <input
+            <Input
+              id="note"
               type="text"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950"
             />
           </div>
-          {user?.is_manager && (
-            <label className="flex items-center gap-2 pb-2 text-xs text-zinc-500">
+          {user?.is_manager ? (
+            <label
+              className={cn(
+                "inline-flex h-9 cursor-pointer select-none items-center gap-2 rounded-md border px-3 text-sm transition-colors duration-150",
+                allowNegative
+                  ? "border-warning/50 bg-warning-soft text-warning-text"
+                  : "border-strong bg-raised text-secondary hover:border-accent/50",
+              )}
+            >
               <input
                 type="checkbox"
                 checked={allowNegative}
                 onChange={(e) => setAllowNegative(e.target.checked)}
-                className="h-4 w-4"
+                className="size-3.5 accent-current"
               />
               Allow below zero
             </label>
-          )}
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            {saving ? "Saving…" : "Record"}
-          </button>
+          ) : null}
+          <Button type="submit" variant="primary" disabled={saving}>
+            {saving ? "Saving…" : "Record movement"}
+          </Button>
         </form>
-      </div>
+      </Panel>
 
-      {/* Ledger */}
-      <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-          <h3 className="text-sm font-semibold">Movement ledger</h3>
-        </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-              <th className="px-4 py-2 font-medium">When</th>
-              <th className="px-4 py-2 font-medium">Reason</th>
-              <th className="px-4 py-2 text-right font-medium">Change</th>
-              <th className="px-4 py-2 font-medium">By</th>
-              <th className="px-4 py-2 font-medium">Note / PO</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {ledger.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-zinc-500">
-                  No movements yet.
-                </td>
-              </tr>
-            ) : (
-              ledger.map((m) => (
-                <tr key={m.id}>
-                  <td className="px-4 py-2 text-zinc-500">
+      <Panel
+        eyebrow="Audit trail"
+        title="Movement ledger"
+        description="Every change to this product's stock, and what caused it."
+        icon={History}
+        bodyClassName={ledger.length === 0 ? "p-5" : "p-0"}
+      >
+        {ledger.length === 0 ? (
+          <EmptyState
+            icon={History}
+            title="No movements recorded yet"
+            body="Stock movements appear here as soon as this product is packed into an order, received on a purchase order, or corrected above."
+          />
+        ) : (
+          <Table>
+            <THead>
+              <TH>When</TH>
+              <TH>Reason</TH>
+              <TH align="right">Change</TH>
+              <TH>By</TH>
+              <TH>Note / PO</TH>
+            </THead>
+            <TBody>
+              {ledger.map((m) => (
+                <TR key={m.id}>
+                  <TD className="whitespace-nowrap text-xs text-secondary">
                     {formatDateTime(m.created_at)}
-                  </td>
-                  <td className="px-4 py-2">{m.reason_display}</td>
-                  <td
-                    className={`px-4 py-2 text-right font-mono font-medium ${
-                      m.quantity_delta >= 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-red-600 dark:text-red-400"
-                    }`}
+                  </TD>
+                  <TD>{m.reason_display}</TD>
+                  <TD
+                    align="right"
+                    mono
+                    className={cn(
+                      "font-semibold",
+                      m.quantity_delta >= 0 ? "text-success" : "text-critical",
+                    )}
                   >
-                    {m.quantity_delta > 0 ? `+${m.quantity_delta}` : m.quantity_delta}
-                  </td>
-                  <td className="px-4 py-2 text-zinc-500">
+                    {m.quantity_delta > 0
+                      ? `+${m.quantity_delta}`
+                      : m.quantity_delta}
+                  </TD>
+                  <TD className="text-secondary">
                     {m.created_by_username ?? "—"}
-                  </td>
-                  <td className="px-4 py-2 text-zinc-500">
+                  </TD>
+                  <TD className="text-secondary">
                     {m.purchase_order ? (
                       <Link
                         href="/purchase-orders"
-                        className="text-indigo-600 hover:underline dark:text-indigo-400"
+                        className="text-accent-text hover:underline"
                       >
                         PO #{m.purchase_order}
                       </Link>
                     ) : (
                       m.note || "—"
                     )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+      </Panel>
 
-      {showReorder && (
+      {showReorder ? (
         <ReorderModal
           product={product}
           onClose={() => setShowReorder(false)}
@@ -272,7 +358,7 @@ export default function ProductDetailPage() {
             router.push("/purchase-orders");
           }}
         />
-      )}
+      ) : null}
     </div>
   );
 }

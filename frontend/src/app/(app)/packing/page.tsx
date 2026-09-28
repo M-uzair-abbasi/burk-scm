@@ -1,9 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CheckCircle2, ScanLine, TriangleAlert } from "lucide-react";
 
-import { ChannelBadge } from "@/components/ChannelBadge";
+import { Button } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Panel } from "@/components/ui/Panel";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { ChannelTag } from "@/components/ui/StatusPill";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
 import { ApiError } from "@/lib/api";
 import { packing } from "@/lib/resources";
 import { formatDateTime, formatPKR } from "@/lib/format";
@@ -16,16 +22,21 @@ export default function PackingQueuePage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(() => {
-    return packing
-      .queue()
-      .then(setRows)
-      .finally(() => setLoading(false));
-  }, []);
-
   useEffect(() => {
-    reload();
-  }, [reload]);
+    let alive = true;
+    packing
+      .queue()
+      .then((queue) => {
+        if (alive) setRows(queue);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function startPacking(order: PackQueueOrder) {
     setError(null);
@@ -34,82 +45,107 @@ export default function PackingQueuePage() {
       const session = await packing.start(order.id);
       router.push(`/packing/${session.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not start packing.");
+      setError(
+        err instanceof ApiError ? err.message : "Could not start packing.",
+      );
       setBusyId(null);
     }
   }
 
-  if (loading) return <p className="text-sm text-zinc-500">Loading…</p>;
-
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
-        Orders awaiting packing, oldest first. Open one and scan each item to
-        verify it before sealing — the station blocks any item that doesn&apos;t
-        belong to the order.
-      </div>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Packing station"
+        description="Orders waiting to be packed, oldest first. Open one and scan every item before sealing — the station blocks anything that does not belong to that order, so a wrong item can never reach a customer."
+      />
 
-      {error && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+      {error ? (
+        <div className="flex items-center gap-2 rounded-lg border border-critical/30 bg-critical-soft px-4 py-2.5 text-sm text-critical-text">
+          <TriangleAlert aria-hidden className="size-4 shrink-0" />
           {error}
         </div>
-      )}
+      ) : null}
 
-      {rows.length === 0 ? (
-        <div className="rounded-xl border border-zinc-200 bg-white px-5 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
-          Nothing to pack. New orders appear here once they&apos;re synced into the
-          queue.
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-                <th className="px-4 py-3 font-medium">Ref</th>
-                <th className="px-4 py-3 font-medium">Channel</th>
-                <th className="px-4 py-3 font-medium">Order #</th>
-                <th className="px-4 py-3 font-medium">Customer</th>
-                <th className="px-4 py-3 text-right font-medium">Items</th>
-                <th className="px-4 py-3 text-right font-medium">Total</th>
-                <th className="px-4 py-3 font-medium">Placed</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {rows.map((o) => (
-                <tr key={o.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">
+      <Panel
+        eyebrow="Queue"
+        title={
+          loading
+            ? "Loading…"
+            : `${rows.length} order${rows.length === 1 ? "" : "s"} awaiting packing`
+        }
+        icon={ScanLine}
+        bodyClassName="p-0"
+      >
+        {loading ? (
+          <div className="px-5 py-12 text-center text-sm text-secondary">
+            Loading the queue…
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="p-5">
+            <EmptyState
+              icon={CheckCircle2}
+              title="Nothing is waiting to be packed"
+              body="Every confirmed order has been packed and sealed. New orders land here automatically as soon as a channel sync brings them in."
+              action={
+                <Button variant="secondary" onClick={() => router.push("/orders")}>
+                  View all orders
+                </Button>
+              }
+            />
+          </div>
+        ) : (
+          <Table>
+            <THead>
+              <TH>Ref</TH>
+              <TH>Channel</TH>
+              <TH>Order #</TH>
+              <TH>Customer</TH>
+              <TH align="right">Items</TH>
+              <TH align="right">Total</TH>
+              <TH>Placed</TH>
+              <TH align="right">Action</TH>
+            </THead>
+            <TBody>
+              {rows.map((o, index) => (
+                <TR key={o.id}>
+                  <TD mono className="font-semibold">
                     {o.reference}
-                  </td>
-                  <td className="px-4 py-3">
-                    <ChannelBadge channel={o.channel} label={o.channel_display} />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                  </TD>
+                  <TD>
+                    <ChannelTag channel={o.channel} label={o.channel_display} />
+                  </TD>
+                  <TD mono className="text-secondary">
                     {o.external_id}
-                  </td>
-                  <td className="px-4 py-3 font-medium">{o.customer_name || "—"}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{o.item_count}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">
+                  </TD>
+                  <TD className="font-medium">{o.customer_name || "—"}</TD>
+                  <TD align="right" mono>
+                    {o.item_count}
+                  </TD>
+                  <TD align="right" mono>
                     {formatPKR(o.total)}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-zinc-500">
+                  </TD>
+                  <TD className="whitespace-nowrap text-xs text-secondary">
                     {formatDateTime(o.placed_at)}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
+                  </TD>
+                  <TD align="right">
+                    {/* Only the head of the queue gets the filled button: the
+                        station is meant to be worked oldest-first, and two
+                        equally loud buttons would make that ordering invisible. */}
+                    <Button
+                      size="sm"
+                      variant={index === 0 ? "primary" : "secondary"}
                       disabled={busyId === o.id}
                       onClick={() => startPacking(o)}
-                      className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
                     >
-                      {busyId === o.id ? "…" : "Start packing"}
-                    </button>
-                  </td>
-                </tr>
+                      {busyId === o.id ? "Opening…" : "Start packing"}
+                    </Button>
+                  </TD>
+                </TR>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            </TBody>
+          </Table>
+        )}
+      </Panel>
     </div>
   );
 }

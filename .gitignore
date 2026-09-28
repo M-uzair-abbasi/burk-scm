@@ -26,3 +26,6 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+.local-logs/
+*.sqlite3-wal
+*.sqlite3-shm

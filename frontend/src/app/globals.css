@@ -1,28 +1,233 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f7f7f8;
-  --foreground: #18181b;
-}
+/* ============================================================================
+   Burk.pk SCM-OVS — operational console tokens
+   ----------------------------------------------------------------------------
+   Two surface families, deliberately different:
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  /* Neutral system stack: a dense internal tool wants fast, legible, and
-     unopinionated type, not a downloaded brand face. */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+     WORK surfaces  (light)  — tables, forms, reference data. Calm, legible,
+                               high text contrast, minimal decoration.
+     INSTRUMENT     (dark)   — live operational signals. Dark in BOTH colour
+     surfaces                  schemes, because an instrument panel reading
+                               "all within threshold" should look the same on
+                               every machine on the floor.
+
+   Colour discipline — the rule that fixes the old rainbow:
+     · ACCENT (teal) is *interactive only* — links, active nav, primary
+       buttons, focus rings. It is never a status.
+     · STATUS is a 4-tier scale and nothing else:
+         neutral  = inert / not started / informational
+         success  = done, healthy, within threshold
+         warning  = needs a human soon
+         critical = blocked, failed, breached
+     · Channels (Burk/Daraz) are NOT status, so they render as neutral pills
+       with a small identifying dot — they never borrow a status colour.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* Work surfaces ---------------------------------------------------------- */
+  --surface-page: #f6f7f8;
+  --surface-raised: #ffffff;
+  --surface-sunken: #eef0f2;
+  --surface-hover: #f1f3f5;
+
+  --border-subtle: #e3e6e9;
+  --border-strong: #cdd2d7;
+
+  --text-primary: #10161c;
+  --text-secondary: #55616d;
+  --text-muted: #8a95a1;
+  --text-inverse: #f7fafc;
+
+  /* Instrument surfaces (identical in light and dark) ---------------------- */
+  --instrument-bg: #10161c;
+  --instrument-raised: #1a222b;
+  --instrument-border: #2b3641;
+  --instrument-text: #e6ebf0;
+  --instrument-muted: #8b99a8;
+
+  /* Interactive accent — never a status ------------------------------------ */
+  --accent: #0c7c8a;
+  --accent-hover: #0a6b77;
+  --accent-strong: #095e69;
+  --accent-soft: #e2f2f4;
+  --accent-text: #06525c;
+  --accent-on: #ffffff;
+  --accent-bright: #2fd3e8; /* for use on instrument surfaces */
+
+  /* Status scale ----------------------------------------------------------- */
+  --status-neutral: #64717e;
+  --status-neutral-soft: #eceff1;
+  --status-neutral-text: #46525e;
+
+  --status-success: #0f7a52;
+  --status-success-soft: #e0f3ea;
+  --status-success-text: #0b5c3e;
+
+  --status-warning: #a86100;
+  --status-warning-soft: #fdefdc;
+  --status-warning-text: #7d4800;
+
+  --status-critical: #b3261e;
+  --status-critical-soft: #fce9e7;
+  --status-critical-text: #8c1d17;
+
+  /* Channel identity dots (non-status) ------------------------------------- */
+  --channel-burk: #0c7c8a;
+  --channel-daraz: #7c4dbe;
+
+  --ring: #0c7c8a;
+  --shadow-card: 0 1px 2px rgb(16 22 28 / 0.05), 0 1px 1px rgb(16 22 28 / 0.04);
+  --shadow-raised: 0 4px 12px rgb(16 22 28 / 0.08), 0 1px 3px rgb(16 22 28 / 0.06);
+  --shadow-overlay: 0 16px 48px rgb(16 22 28 / 0.22);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --surface-page: #0b1015;
+    --surface-raised: #141b22;
+    --surface-sunken: #0f151b;
+    --surface-hover: #1b242d;
+
+    --border-subtle: #232d37;
+    --border-strong: #35424e;
+
+    --text-primary: #e9eef3;
+    --text-secondary: #a3b0bd;
+    --text-muted: #73808d;
+    --text-inverse: #10161c;
+
+    --accent: #2fb5c6;
+    --accent-hover: #46c5d5;
+    --accent-strong: #6ad4e2;
+    --accent-soft: #10323a;
+    --accent-text: #7fdcea;
+    --accent-on: #04232a;
+
+    --status-neutral: #8896a4;
+    --status-neutral-soft: #1c252e;
+    --status-neutral-text: #aab7c4;
+
+    --status-success: #35c88b;
+    --status-success-soft: #0d2b21;
+    --status-success-text: #6fdcae;
+
+    --status-warning: #e0a03c;
+    --status-warning-soft: #2e2214;
+    --status-warning-text: #f0bf72;
+
+    --status-critical: #f0776c;
+    --status-critical-soft: #331b19;
+    --status-critical-text: #f7a49c;
+
+    --channel-burk: #2fb5c6;
+    --channel-daraz: #a684e0;
+
+    --ring: #2fb5c6;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-raised: 0 4px 14px rgb(0 0 0 / 0.5);
+    --shadow-overlay: 0 16px 48px rgb(0 0 0 / 0.6);
   }
 }
 
+@theme inline {
+  --color-page: var(--surface-page);
+  --color-raised: var(--surface-raised);
+  --color-sunken: var(--surface-sunken);
+  --color-hover: var(--surface-hover);
+
+  --color-subtle: var(--border-subtle);
+  --color-strong: var(--border-strong);
+
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-inverse: var(--text-inverse);
+
+  --color-instrument: var(--instrument-bg);
+  --color-instrument-raised: var(--instrument-raised);
+  --color-instrument-border: var(--instrument-border);
+  --color-instrument-text: var(--instrument-text);
+  --color-instrument-muted: var(--instrument-muted);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-accent-on: var(--accent-on);
+  --color-accent-bright: var(--accent-bright);
+
+  --color-neutral-signal: var(--status-neutral);
+  --color-neutral-soft: var(--status-neutral-soft);
+  --color-neutral-text: var(--status-neutral-text);
+  --color-success: var(--status-success);
+  --color-success-soft: var(--status-success-soft);
+  --color-success-text: var(--status-success-text);
+  --color-warning: var(--status-warning);
+  --color-warning-soft: var(--status-warning-soft);
+  --color-warning-text: var(--status-warning-text);
+  --color-critical: var(--status-critical);
+  --color-critical-soft: var(--status-critical-soft);
+  --color-critical-text: var(--status-critical-text);
+
+  --color-channel-burk: var(--channel-burk);
+  --color-channel-daraz: var(--channel-daraz);
+
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-overlay: var(--shadow-overlay);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--surface-page);
+  color: var(--text-primary);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numeric columns must line up. Any element showing a figure gets this. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* The small uppercase label used on panel headers and stat captions. */
+.eyebrow {
+  font-size: 0.6875rem;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* One focus treatment everywhere, so keyboard users get a consistent ring. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.live-dot {
+  animation: pulse-dot 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }
