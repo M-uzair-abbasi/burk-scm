@@ -111,7 +111,8 @@ class AdapterSelectionTests(SimpleTestCase):
         DARAZ_ACCESS_TOKEN="",
         DARAZ_API_BASE_URL="",
         BURK_ORDER_API_BASE_URL="",
-        BURK_ORDER_API_TOKEN="",
+        BURK_ORDER_API_CONSUMER_KEY="",
+        BURK_ORDER_API_CONSUMER_SECRET="",
     )
     def test_live_connector_health_names_missing_settings_without_secret_values(self):
         daraz = get_connector("daraz").health()
@@ -128,5 +129,9 @@ class AdapterSelectionTests(SimpleTestCase):
         )
         self.assertEqual(
             set(burk["missing_settings"]),
-            {"BURK_ORDER_API_BASE_URL", "BURK_ORDER_API_TOKEN"},
+            {
+                "BURK_ORDER_API_BASE_URL",
+                "BURK_ORDER_API_CONSUMER_KEY",
+                "BURK_ORDER_API_CONSUMER_SECRET",
+            },
         )

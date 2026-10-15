@@ -286,7 +286,10 @@ DARAZ_APP_SECRET = env("DARAZ_APP_SECRET", default="")
 DARAZ_ACCESS_TOKEN = env("DARAZ_ACCESS_TOKEN", default="")
 DARAZ_API_BASE_URL = env("DARAZ_API_BASE_URL", default="")
 BURK_ORDER_API_BASE_URL = env("BURK_ORDER_API_BASE_URL", default="")
-BURK_ORDER_API_TOKEN = env("BURK_ORDER_API_TOKEN", default="")
+# WooCommerce's REST API authenticates with a consumer key/secret pair (HTTP
+# Basic Auth over HTTPS), not a single bearer token.
+BURK_ORDER_API_CONSUMER_KEY = env("BURK_ORDER_API_CONSUMER_KEY", default="")
+BURK_ORDER_API_CONSUMER_SECRET = env("BURK_ORDER_API_CONSUMER_SECRET", default="")
 
 # Module 6: how long after delivery the review-reminder notification is made
 # eligible for the durable worker. A real deployment normally uses hours/days.
