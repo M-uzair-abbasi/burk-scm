@@ -16,6 +16,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from fulfillment.models import PackingSession
 from fulfillment.services import complete_packing, record_scan, start_packing
 from inventory.models import Product, StockMovement
 from inventory.services import record_movement
@@ -156,7 +157,11 @@ class SaveUploadedRecordingTests(TestCase):
         with self.assertRaises(ValidationError):
             save_uploaded_recording(session, _Upload())
 
-    def test_rejects_upload_after_sealing(self):
+    def test_a_late_upload_after_sealing_is_still_accepted_before_processing(self):
+        """Sealing alone isn't the cutoff -- the worker retries a sealed pack
+        with no upload yet, so a late upload has to still be able to rescue
+        it. See test_sealing_before_the_upload_lands_retries_until_it_does
+        in BrowserRecordingEndToEndTests for the full worker-side proof."""
         session = start_packing(self.order)
         start_recording(session)
         record_scan(session, self.product.barcode)
@@ -164,6 +169,34 @@ class SaveUploadedRecordingTests(TestCase):
         session.refresh_from_db()
         seal_recording(session)
         session.refresh_from_db()  # drop the pre-seal cached .recording
+
+        class _Upload:
+            size = 4
+
+            def read(self, n=-1):
+                data = b"\x1a\x45\xdf\xa3"
+                return data[:n] if n >= 0 else data
+
+            def seek(self, _offset):
+                pass
+
+            def chunks(self):
+                yield b"\x1a\x45\xdf\xa3"
+
+        recording = save_uploaded_recording(session, _Upload())
+        self.assertTrue(recording.raw_checksum)
+
+    def test_rejects_upload_once_the_recording_has_already_been_processed(self):
+        session = start_packing(self.order)
+        start_recording(session)
+        record_scan(session, self.product.barcode)
+        complete_packing(session)
+        session.refresh_from_db()
+        seal_recording(session)
+        session.refresh_from_db()
+        # Simulate the worker having already consumed a version of this clip.
+        session.recording.duration_seconds = 3.0
+        session.recording.save(update_fields=["duration_seconds"])
 
         class _Upload:
             size = 4
@@ -188,6 +221,45 @@ class SaveUploadedRecordingTests(TestCase):
 
         raw_abs = Path(self._tmp.name) / getattr(session, "recording").raw_path
         self.assertFalse(raw_abs.exists())
+
+    def test_locked_recheck_catches_processing_that_finished_during_the_write(self):
+        """A caller holding a Python object fetched before the worker
+        processed this recording (e.g. a slow upload request) must not be
+        able to use that staleness to overwrite already-trusted evidence --
+        the lock inside save_uploaded_recording has to re-read the real
+        current state, not trust what the caller's object says."""
+        session = start_packing(self.order)
+        start_recording(session)
+        # Stands in for a second, concurrent request that fetched its own
+        # copy of the session (and cached its .recording) before anyone else
+        # processed this recording.
+        stale_session = PackingSession.objects.get(pk=session.pk)
+        self.assertIsNone(stale_session.recording.duration_seconds)  # cache it
+
+        # The recording gets processed for real in the DB while that
+        # request's (slow) upload write is still in flight.
+        session.recording.duration_seconds = 2.5
+        session.recording.raw_checksum = "deadbeef"
+        session.recording.save(update_fields=["duration_seconds", "raw_checksum"])
+
+        class _Upload:
+            size = 4
+
+            def read(self, n=-1):
+                data = b"\x1a\x45\xdf\xa3"
+                return data[:n] if n >= 0 else data
+
+            def seek(self, _offset):
+                pass
+
+            def chunks(self):
+                yield b"\x1a\x45\xdf\xa3"
+
+        with self.assertRaises(ValidationError):
+            save_uploaded_recording(stale_session, _Upload())
+
+        # Nothing got left behind from the rejected write.
+        self.assertEqual(list(Path(self._tmp.name).glob("**/*.part-*")), [])
 
 
 class DetectContainerTests(TestCase):
@@ -315,3 +387,57 @@ class BrowserRecordingEndToEndTests(TestCase):
 
         recording.refresh_from_db()
         self.assertEqual(recording.status, PackagingRecording.Status.READY)
+
+    def test_worker_refuses_a_raw_file_that_no_longer_matches_its_upload_checksum(self):
+        """If the file at raw_path changed after save_uploaded_recording
+        checksummed it -- the actual scenario the locked recheck is meant to
+        close off, caught here one layer deeper in case that ever regresses
+        -- the worker must refuse to treat it as trustworthy evidence rather
+        than silently compressing and dispatching whatever is there."""
+        product = make_product("BRK-BROWSER-TAMPER", "5560005")
+        order = make_order("SO-BROWSER-TAMPER", [(product, 1)])
+        session = start_packing(order)
+        recording = start_recording(session)
+
+        class _Upload:
+            def __init__(self, path):
+                self._path = path
+                self.size = Path(path).stat().st_size
+
+            def read(self, n=-1):
+                with open(self._path, "rb") as stream:
+                    return stream.read(n)
+
+            def seek(self, _offset):
+                pass
+
+            def chunks(self):
+                with open(self._path, "rb") as stream:
+                    yield stream.read()
+
+        raw_clip = Path(self._tmp.name) / "uploaded.mp4"
+        write_real_clip(str(raw_clip), duration_seconds=1.0)
+        save_uploaded_recording(session, _Upload(str(raw_clip)))
+
+        record_scan(session, product.barcode)
+        complete_packing(session)
+        session.refresh_from_db()
+        seal_recording(session)
+
+        # Tamper with the raw file in place, after the checksum was already
+        # recorded at upload time but before the worker has read it.
+        recording.refresh_from_db()
+        raw_abs = Path(self._tmp.name) / recording.raw_path
+        write_real_clip(str(raw_abs), duration_seconds=9.0)
+
+        process_due(limit=1, worker_name="browser-tamper-test")
+
+        recording.refresh_from_db()
+        self.assertEqual(recording.status, PackagingRecording.Status.FAILED)
+        self.assertIn("changed after upload", recording.error)
+        self.assertEqual(
+            Notification.objects.filter(
+                order=order, kind=Notification.Kind.PACKAGING_VIDEO
+            ).count(),
+            0,
+        )

@@ -498,7 +498,10 @@ class RecordingUploadTests(TestCase):
         raw_abs = Path(self._tmp.name) / self.recording.raw_path
         self.assertFalse(raw_abs.exists())
 
-    def test_upload_after_sealing_is_rejected(self):
+    def test_a_late_upload_after_sealing_is_still_accepted(self):
+        """Sealing alone isn't the cutoff -- the worker retries a sealed pack
+        with no upload yet until one lands, so a late upload has to still be
+        able to rescue it."""
         record_scan(
             self.order.packing_sessions.get(pk=self.session_id),
             self.product.barcode,
@@ -508,6 +511,19 @@ class RecordingUploadTests(TestCase):
             f"/api/packing/{self.session_id}/complete/", {}, format="json"
         )
         self.assertEqual(complete_response.status_code, 200)
+
+        response = self.client.post(
+            f"/api/packing/{self.session_id}/recording/",
+            {"video": make_video()},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_upload_is_rejected_once_already_processed(self):
+        # Simulate the worker having already consumed a version of this clip.
+        self.recording.duration_seconds = 3.0
+        self.recording.save(update_fields=["duration_seconds"])
 
         response = self.client.post(
             f"/api/packing/{self.session_id}/recording/",

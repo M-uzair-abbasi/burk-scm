@@ -73,16 +73,28 @@ def save_uploaded_recording(session, uploaded_file) -> PackagingRecording:
     Only the browser camera backend calls this -- the simulated and hardware
     adapters materialize their own raw file inside process_recording_work via
     camera.stop()/recover() instead. Writes to a temp file in the same
-    directory and renames into place so a worker racing this upload never
-    observes a partially-written file.
+    directory first (no lock needed for that slow part), then, holding a row
+    lock, re-checks whether the worker has already consumed a version of this
+    recording and atomically renames into place.
+
+    Sealing alone is deliberately not the cutoff: the worker retries a sealed
+    pack with no upload yet (RETRYING) until one lands, so a late upload is a
+    legitimate recovery path, not an attack. duration_seconds is set exactly
+    once, by the worker's first successful camera.stop()/recover() read of
+    the raw file -- once that has happened, the evidence has been read,
+    checksummed and possibly already compressed and sent to the customer, so
+    a replacement past that point is what actually has to be refused. The
+    checksum recorded here, from the bytes actually written, is what
+    process_recording_work verifies against if it hasn't reached that point
+    yet, rather than trusting whatever is on disk when it gets there.
     """
     recording = getattr(session, "recording", None)
     if recording is None:
         raise ValidationError("Recording has not been started for this session.")
-    if recording.sealed_at is not None:
+    if recording.duration_seconds is not None:
         raise ValidationError(
-            "This pack has already been sealed; the recording can no longer "
-            "be replaced."
+            "This recording has already been processed; it can no longer be "
+            "replaced."
         )
     if uploaded_file.size > settings.PACKAGING_UPLOAD_MAX_BYTES:
         raise ValidationError(
@@ -104,8 +116,31 @@ def save_uploaded_recording(session, uploaded_file) -> PackagingRecording:
     with open(tmp_path, "wb") as destination:
         for chunk in uploaded_file.chunks():
             destination.write(chunk)
-    os.replace(tmp_path, final_path)
-    return recording
+    checksum = _checksum(tmp_path)
+    size = os.path.getsize(tmp_path)
+
+    try:
+        with transaction.atomic():
+            locked = PackagingRecording.objects.select_for_update().get(
+                pk=recording.pk
+            )
+            if locked.duration_seconds is not None:
+                raise ValidationError(
+                    "This recording was processed while the upload was "
+                    "still in flight; it can no longer be replaced."
+                )
+            os.replace(tmp_path, final_path)
+            locked.raw_checksum = checksum
+            locked.raw_size_bytes = size
+            locked.captured_at = timezone.now()
+            locked.save(
+                update_fields=["raw_checksum", "raw_size_bytes", "captured_at"]
+            )
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    return locked
 
 
 def _capture_handle(recording: PackagingRecording) -> CaptureHandle | None:
@@ -253,7 +288,11 @@ def process_recording_work(item) -> PackagingRecording:
     raw_abs = _media_path(recording.raw_path)
     compressed_abs = _media_path(recording.compressed_path)
     try:
-        if not recording.raw_checksum or not os.path.exists(raw_abs):
+        # duration_seconds (not raw_checksum) is the "have we probed this
+        # clip yet" signal: a browser upload already has its checksum set at
+        # upload time (see save_uploaded_recording), but still needs stop()
+        # called once to read its duration.
+        if recording.duration_seconds is None or not os.path.exists(raw_abs):
             camera = get_camera(recording.camera_name or None)
             handle = _capture_handle(recording)
             result = (
@@ -262,9 +301,21 @@ def process_recording_work(item) -> PackagingRecording:
                 else camera.recover(recording.session, raw_abs)
             )
             recording.duration_seconds = result.duration_seconds
-            recording.raw_size_bytes = os.path.getsize(raw_abs)
-            recording.raw_checksum = _checksum(raw_abs)
-            recording.captured_at = timezone.now()
+            observed_checksum = _checksum(raw_abs)
+            if recording.raw_checksum:
+                # A browser upload already recorded this at upload time, from
+                # the exact bytes it wrote -- if what's on disk now doesn't
+                # match, something replaced the raw file after the fact and
+                # this evidence can no longer be trusted.
+                if observed_checksum != recording.raw_checksum:
+                    raise PermanentWorkError(
+                        "Raw recording changed after upload; refusing to "
+                        "process unverified footage."
+                    )
+            else:
+                recording.raw_size_bytes = os.path.getsize(raw_abs)
+                recording.raw_checksum = observed_checksum
+                recording.captured_at = timezone.now()
             recording.save(
                 update_fields=[
                     "duration_seconds",
