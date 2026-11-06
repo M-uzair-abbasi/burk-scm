@@ -54,11 +54,28 @@ def create_po(*, supplier, user=None, expected_date=None, notes="", lines=None):
     )
     _assign_po_number(po)
     for line in lines or []:
+        supplier_product = line.get("supplier_product")
+        if supplier_product is None:
+            supplier_product = SupplierProduct.objects.filter(
+                supplier=supplier,
+                product=line["product"],
+                is_active=True,
+            ).first()
+        effective_lead_time_days = line.get("effective_lead_time_days")
+        if effective_lead_time_days is None:
+            effective_lead_time_days = (
+                supplier_product.effective_lead_time_days
+                if supplier_product is not None
+                else supplier.default_lead_time_days
+            )
         PurchaseOrderLine.objects.create(
             purchase_order=po,
             product=line["product"],
+            supplier_product=supplier_product,
             quantity_ordered=line["quantity_ordered"],
             unit_price=line["unit_price"],
+            effective_lead_time_days=effective_lead_time_days,
+            price_tier_min_quantity=line.get("price_tier_min_quantity"),
         )
     return po
 
@@ -84,8 +101,8 @@ def create_reorder_po(*, product, user=None, quantity=None, supplier=None):
             f"{product.sku} has no reorder quantity set; specify one to reorder."
         )
 
-    unit_price = sp.unit_price_for(quantity)
-    if unit_price is None:
+    tier = sp.price_tier_for(quantity)
+    if tier is None:
         raise ValidationError(
             f"No price tier covers {quantity} units for {product.sku}."
         )
@@ -97,7 +114,10 @@ def create_reorder_po(*, product, user=None, quantity=None, supplier=None):
             {
                 "product": product,
                 "quantity_ordered": quantity,
-                "unit_price": unit_price,
+                "unit_price": tier.unit_price,
+                "supplier_product": sp,
+                "effective_lead_time_days": sp.effective_lead_time_days,
+                "price_tier_min_quantity": tier.min_quantity,
             }
         ],
     )
@@ -113,7 +133,9 @@ def submit_po(po: PurchaseOrder) -> PurchaseOrder:
     if not po.lines.exists():
         raise ValidationError("Cannot submit a PO with no lines.")
 
-    lead = po.supplier.default_lead_time_days
+    lead = max(
+        po.lines.values_list("effective_lead_time_days", flat=True)
+    )
     po.status = PurchaseOrder.Status.SUBMITTED
     po.submitted_at = timezone.now()
     po.expected_date = timezone.localdate() + timedelta(days=lead)
@@ -129,12 +151,20 @@ def receive_po(po: PurchaseOrder, *, receipts=None, user=None) -> PurchaseOrder:
     every line's full outstanding quantity is received. Sets the PO to RECEIVED
     when nothing remains outstanding, otherwise PARTIALLY_RECEIVED.
     """
-    if po.status not in {
+    locked_po = (
+        PurchaseOrder.objects.select_for_update()
+        .select_related("supplier")
+        .get(pk=po.pk)
+    )
+    if locked_po.status == PurchaseOrder.Status.RECEIVED:
+        return locked_po
+    if locked_po.status not in {
         PurchaseOrder.Status.SUBMITTED,
         PurchaseOrder.Status.PARTIALLY_RECEIVED,
     }:
         raise ValidationError(
-            f"{po.po_number} is not in a receivable state ({po.get_status_display()})."
+            f"{locked_po.po_number} is not in a receivable state "
+            f"({locked_po.get_status_display()})."
         )
 
     requested = None
@@ -142,7 +172,12 @@ def receive_po(po: PurchaseOrder, *, receipts=None, user=None) -> PurchaseOrder:
         requested = {int(item["line"]): int(item["quantity"]) for item in receipts}
 
     any_received = False
-    for line in po.lines.select_related("product"):
+    locked_lines = list(
+        PurchaseOrderLine.objects.select_for_update()
+        .select_related("product")
+        .filter(purchase_order=locked_po)
+    )
+    for line in locked_lines:
         outstanding = line.quantity_outstanding
         if outstanding <= 0:
             continue
@@ -159,8 +194,8 @@ def receive_po(po: PurchaseOrder, *, receipts=None, user=None) -> PurchaseOrder:
             quantity_delta=qty,
             reason=StockMovement.Reason.PURCHASE_RECEIPT,
             user=user,
-            purchase_order=po,
-            note=f"Receipt against {po.po_number}",
+            purchase_order=locked_po,
+            note=f"Receipt against {locked_po.po_number}",
         )
         line.quantity_received += qty
         line.save(update_fields=["quantity_received"])
@@ -169,17 +204,15 @@ def receive_po(po: PurchaseOrder, *, receipts=None, user=None) -> PurchaseOrder:
     if not any_received:
         raise ValidationError("Nothing to receive: quantities were zero or already received.")
 
-    # Re-query from the base manager: po.lines may carry a stale prefetch
-    # cache from when the PO was loaded (before this receipt updated the rows),
-    # which would misreport a fully received PO as only partially received.
-    fresh_lines = PurchaseOrderLine.objects.filter(purchase_order=po)
-    fully_received = all(line.quantity_outstanding == 0 for line in fresh_lines)
-    po.status = (
+    fully_received = all(line.quantity_outstanding == 0 for line in locked_lines)
+    locked_po.status = (
         PurchaseOrder.Status.RECEIVED
         if fully_received
         else PurchaseOrder.Status.PARTIALLY_RECEIVED
     )
     if fully_received:
-        po.received_at = timezone.now()
-    po.save(update_fields=["status", "received_at", "updated_at"])
-    return po
+        locked_po.received_at = timezone.now()
+    locked_po.save(update_fields=["status", "received_at", "updated_at"])
+    po.status = locked_po.status
+    po.received_at = locked_po.received_at
+    return locked_po

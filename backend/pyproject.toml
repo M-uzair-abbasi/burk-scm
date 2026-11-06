@@ -9,6 +9,8 @@ dependencies = [
     "djangorestframework>=3.16",
     "psycopg[binary]>=3.2",
     "django-environ>=0.12",
+    "gunicorn>=23,<24",
+    "requests>=2.34.2",
 ]
 
 [tool.uv]

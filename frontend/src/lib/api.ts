@@ -56,7 +56,13 @@ export async function apiFetch<T>(
   const method = (options.method ?? "GET").toUpperCase();
   const headers = new Headers(options.headers);
 
-  if (options.body && !headers.has("Content-Type")) {
+  // FormData (video upload) must keep the browser's own multipart boundary
+  // header -- setting "application/json" on top of it breaks the upload.
+  if (
+    options.body &&
+    !(options.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
   if (UNSAFE_METHODS.has(method)) {

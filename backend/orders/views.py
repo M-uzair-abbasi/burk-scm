@@ -1,7 +1,9 @@
-from rest_framework import filters, mixins, viewsets
+from rest_framework import filters, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from common.permissions import IsManager
 
 from .models import Channel, SalesOrder, SyncRun
 from .serializers import (
@@ -75,15 +77,29 @@ class SalesOrderViewSet(
             return SalesOrderDetailSerializer
         return SalesOrderListSerializer
 
-    @action(detail=False, methods=["post"])
+    @action(detail=False, methods=["post"], permission_classes=[IsManager])
     def sync(self, request):
         """'Sync now' — pull every channel feed into the queue and return the runs."""
         runs = sync_all(user=request.user)
+        overall_ok = bool(runs) and all(run.ok and run.reconciled for run in runs)
+        if overall_ok:
+            response_status = status.HTTP_200_OK
+        elif any(run.ok for run in runs):
+            response_status = status.HTTP_207_MULTI_STATUS
+        else:
+            response_status = status.HTTP_503_SERVICE_UNAVAILABLE
         return Response(
             {
+                "overall_ok": overall_ok,
                 "runs": SyncRunSerializer(runs, many=True).data,
                 "summary": build_summary(),
-            }
+                "detail": (
+                    "All required channels failed."
+                    if response_status == status.HTTP_503_SERVICE_UNAVAILABLE
+                    else ""
+                ),
+            },
+            status=response_status,
         )
 
     @action(detail=False, methods=["get"])

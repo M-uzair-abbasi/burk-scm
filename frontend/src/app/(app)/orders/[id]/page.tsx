@@ -1,31 +1,109 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import {
+  ArrowLeft,
+  Bell,
+  ChevronRight,
+  Clock,
+  Code2,
+  Receipt,
+  Truck,
+  User,
+} from "lucide-react";
 
-import { ChannelBadge } from "@/components/ChannelBadge";
-import { OrderStatusPill } from "@/components/OrderStatusPill";
+import { useAuth } from "@/components/AuthProvider";
+import { Button } from "@/components/ui/Button";
+import { Panel } from "@/components/ui/Panel";
+import { ChannelTag, LookPill, StatusPill } from "@/components/ui/StatusPill";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
+import { Term } from "@/components/ui/Tooltip";
+import { cn } from "@/components/ui/cn";
+import {
+  NOTIFICATION_STATUS,
+  ORDER_STATUS,
+  SHIPMENT_STATUS,
+} from "@/components/ui/status";
 import { ApiError } from "@/lib/api";
 import { orders as ordersApi, shipments } from "@/lib/resources";
 import { formatDateTime, formatPKR } from "@/lib/format";
 import type { SalesOrder } from "@/lib/types";
 
+function hasActiveAutomation(order: SalesOrder): boolean {
+  const shipmentActive =
+    !!order.shipment_job &&
+    ["pending", "processing", "retry"].includes(order.shipment_job.status);
+  const notificationActive = (order.notifications ?? []).some((notification) =>
+    ["scheduled", "processing", "retrying", "accepted"].includes(
+      notification.status,
+    ),
+  );
+  return shipmentActive || notificationActive;
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="eyebrow text-muted">{label}</dt>
+      <dd className="mt-1 text-sm text-primary">{value}</dd>
+    </div>
+  );
+}
+
 export default function OrderDetailPage() {
   const params = useParams<{ id: string }>();
+  const { user } = useAuth();
   const id = Number(params.id);
   const [order, setOrder] = useState<SalesOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [showRaw, setShowRaw] = useState(false);
   const [shipBusy, setShipBusy] = useState(false);
   const [shipError, setShipError] = useState<string | null>(null);
+  const [pollStopped, setPollStopped] = useState(false);
+  const [pollCycle, setPollCycle] = useState(0);
+  const pollAttempts = useRef(0);
 
   useEffect(() => {
+    pollAttempts.current = 0;
     ordersApi
       .get(id)
-      .then(setOrder)
+      .then((loaded) => {
+        setPollStopped(false);
+        setOrder(loaded);
+      })
       .finally(() => setLoading(false));
   }, [id]);
+
+  const automationActive = order ? hasActiveAutomation(order) : false;
+  useEffect(() => {
+    if (!automationActive) return;
+    let cancelled = false;
+
+    async function poll() {
+      while (!cancelled && pollAttempts.current < 30) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        if (cancelled) return;
+        try {
+          const fresh = await ordersApi.get(id);
+          if (cancelled) return;
+          pollAttempts.current += 1;
+          setOrder(fresh);
+          if (!hasActiveAutomation(fresh)) return;
+        } catch {
+          setPollStopped(true);
+          return;
+        }
+      }
+      if (!cancelled) setPollStopped(true);
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [automationActive, id, pollCycle]);
 
   // Demo stand-in for a real courier webhook (Module 5); DELIVERED also
   // triggers Module 6's scheduled review reminder server-side.
@@ -39,260 +117,345 @@ export default function OrderDetailPage() {
       // creates a new (scheduled) review-request notification server-side.
       setOrder(await ordersApi.get(id));
     } catch (err) {
-      setShipError(err instanceof ApiError ? err.message : "Could not advance shipment.");
+      setShipError(
+        err instanceof ApiError ? err.message : "Could not advance shipment.",
+      );
     } finally {
       setShipBusy(false);
     }
   }
 
-  if (loading) return <p className="text-sm text-zinc-500">Loading…</p>;
-  if (!order) return <p className="text-sm text-zinc-500">Order not found.</p>;
+  if (loading) {
+    return <p className="py-12 text-center text-sm text-secondary">Loading…</p>;
+  }
+  if (!order) {
+    return (
+      <div className="py-12 text-center">
+        <p className="text-sm text-secondary">That order could not be found.</p>
+        <Link
+          href="/orders"
+          className="mt-3 inline-block text-sm text-accent-text hover:underline"
+        >
+          Back to orders
+        </Link>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-5">
-      <Link
-        href="/orders"
-        className="inline-block text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-      >
-        ← Back to queue
-      </Link>
+    <div className="flex flex-col gap-5">
+      <div>
+        <Link
+          href="/orders"
+          className="inline-flex items-center gap-1.5 text-sm text-secondary transition-colors duration-150 hover:text-primary"
+        >
+          <ArrowLeft aria-hidden className="size-3.5" />
+          Back to orders
+        </Link>
 
-      {/* Header */}
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="font-mono text-lg font-semibold">{order.reference}</h2>
-        <ChannelBadge channel={order.channel} label={order.channel_display} />
-        <OrderStatusPill status={order.status} label={order.status_display} />
-        <span className="font-mono text-sm text-zinc-500">
-          {order.channel_display} · {order.external_id}
-        </span>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        {/* Customer */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Customer
-          </h3>
-          <dl className="space-y-2 text-sm">
-            <div>
-              <dt className="text-xs text-zinc-500">Name</dt>
-              <dd className="font-medium">{order.customer_name || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Phone</dt>
-              <dd>{order.customer_phone || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Email</dt>
-              <dd>{order.customer_email || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Ship to</dt>
-              <dd>{order.shipping_address || "—"}</dd>
-            </div>
-          </dl>
-        </div>
-
-        {/* Timeline / sync */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Timeline
-          </h3>
-          <dl className="space-y-2 text-sm">
-            <div>
-              <dt className="text-xs text-zinc-500">Placed on channel</dt>
-              <dd>{formatDateTime(order.placed_at)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">First ingested</dt>
-              <dd>{formatDateTime(order.ingested_at)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-zinc-500">Last synced</dt>
-              <dd>{formatDateTime(order.last_synced_at)}</dd>
-            </div>
-          </dl>
-        </div>
-
-        {/* Totals */}
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Totals
-          </h3>
-          <dl className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-zinc-500">Subtotal</dt>
-              <dd>{formatPKR(order.subtotal)}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-zinc-500">Shipping</dt>
-              <dd>{formatPKR(order.shipping_fee)}</dd>
-            </div>
-            <div className="flex justify-between border-t border-zinc-200 pt-2 font-semibold dark:border-zinc-800">
-              <dt>Total</dt>
-              <dd>{formatPKR(order.total)}</dd>
-            </div>
-          </dl>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="tabular font-mono text-xl font-semibold tracking-tight text-primary">
+            {order.reference}
+          </h1>
+          <ChannelTag channel={order.channel} label={order.channel_display} />
+          <LookPill look={ORDER_STATUS[order.status]}>
+            {order.status_display}
+          </LookPill>
+          <span className="tabular font-mono text-xs text-muted">
+            {order.external_id}
+          </span>
         </div>
       </div>
 
-      {/* Lines */}
-      <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-              <th className="px-4 py-3 font-medium">SKU</th>
-              <th className="px-4 py-3 font-medium">Product</th>
-              <th className="px-4 py-3 text-right font-medium">Qty</th>
-              <th className="px-4 py-3 text-right font-medium">Unit price</th>
-              <th className="px-4 py-3 text-right font-medium">Line total</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Panel eyebrow="Customer" title="Who it goes to" icon={User} bodyClassName="p-5">
+          <dl className="flex flex-col gap-3">
+            <Field label="Name" value={order.customer_name || "—"} />
+            <Field label="Phone" value={order.customer_phone || "—"} />
+            <Field label="Email" value={order.customer_email || "—"} />
+            <Field label="Ship to" value={order.shipping_address || "—"} />
+          </dl>
+        </Panel>
+
+        <Panel eyebrow="Timeline" title="When things happened" icon={Clock} bodyClassName="p-5">
+          <dl className="flex flex-col gap-3">
+            <Field
+              label="Placed on channel"
+              value={formatDateTime(order.placed_at)}
+            />
+            <Field
+              label="First ingested"
+              value={formatDateTime(order.ingested_at)}
+            />
+            <Field
+              label="Last synced"
+              value={formatDateTime(order.last_synced_at)}
+            />
+            <Field
+              label="Channel-reported status"
+              value={order.source_status_display}
+            />
+          </dl>
+        </Panel>
+
+        <Panel eyebrow="Money" title="Totals" icon={Receipt} bodyClassName="p-5">
+          <dl className="flex flex-col gap-2 text-sm">
+            <div className="flex justify-between">
+              <dt className="text-secondary">Subtotal</dt>
+              <dd className="tabular font-mono text-primary">
+                {formatPKR(order.subtotal)}
+              </dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-secondary">Shipping</dt>
+              <dd className="tabular font-mono text-primary">
+                {formatPKR(order.shipping_fee)}
+              </dd>
+            </div>
+            <div className="mt-1 flex justify-between border-t border-subtle pt-2.5">
+              <dt className="font-semibold text-primary">Total</dt>
+              <dd className="tabular font-mono font-semibold text-primary">
+                {formatPKR(order.total)}
+              </dd>
+            </div>
+          </dl>
+        </Panel>
+      </div>
+
+      <Panel eyebrow="Contents" title="Order lines" bodyClassName="p-0">
+        <Table>
+          <THead>
+            <TH>SKU</TH>
+            <TH>Product</TH>
+            <TH align="right">Qty</TH>
+            <TH align="right">Unit price</TH>
+            <TH align="right">Line total</TH>
+          </THead>
+          <TBody>
             {(order.lines ?? []).map((l) => (
-              <tr key={l.id}>
-                <td className="px-4 py-3 font-mono text-xs">{l.sku || "—"}</td>
-                <td className="px-4 py-3">
+              <TR key={l.id}>
+                <TD mono>{l.sku || "—"}</TD>
+                <TD>
                   {l.product ? (
                     <Link
                       href={`/inventory/${l.product}`}
-                      className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                      className="font-medium text-accent-text hover:underline"
                     >
                       {l.product_name}
                     </Link>
                   ) : (
-                    <span className="font-medium">
-                      {l.product_name}
-                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                        unstocked SKU
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-primary">
+                        {l.product_name}
                       </span>
+                      <Term definition="This SKU came from the channel but is not in our catalogue, so it has no stock record and cannot be barcode-verified.">
+                        <StatusPill tone="warning" variant="soft">
+                          unstocked SKU
+                        </StatusPill>
+                      </Term>
                     </span>
                   )}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums">{l.quantity}</td>
-                <td className="px-4 py-3 text-right">{formatPKR(l.unit_price)}</td>
-                <td className="px-4 py-3 text-right font-medium">
+                </TD>
+                <TD align="right" mono>
+                  {l.quantity}
+                </TD>
+                <TD align="right" mono>
+                  {formatPKR(l.unit_price)}
+                </TD>
+                <TD align="right" mono className="font-medium">
                   {formatPKR(l.line_total)}
-                </td>
-              </tr>
+                </TD>
+              </TR>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </TBody>
+        </Table>
+      </Panel>
 
-      {/* Module 5: courier booking + tracking */}
-      {order.shipment && (
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Shipment
-          </h3>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm">
-              <span className="font-medium">{order.shipment.courier_display}</span>
-              <span className="ml-2 font-mono text-zinc-500">
-                {order.shipment.tracking_number}
-              </span>
-              <span className="ml-3 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                {order.shipment.status_display}
-              </span>
+      {order.shipment || order.shipment_job ? (
+        <Panel
+          eyebrow="Logistics"
+          title="Shipment"
+          icon={Truck}
+          bodyClassName="p-5"
+        >
+          {order.shipment ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-sm font-medium text-primary">
+                  {order.shipment.courier_display}
+                </span>
+                <Term definition="The courier's tracking number for this parcel, also called an airway bill.">
+                  <span className="tabular font-mono text-sm text-secondary">
+                    {order.shipment.tracking_number}
+                  </span>
+                </Term>
+                <LookPill look={SHIPMENT_STATUS[order.shipment.status]}>
+                  {order.shipment.status_display}
+                </LookPill>
+              </div>
+              {user?.is_manager ? (
+                <div className="flex gap-2">
+                  {order.shipment.status === "booked" ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={shipBusy}
+                      onClick={() => advanceShipment("in_transit")}
+                    >
+                      Simulate: in transit
+                    </Button>
+                  ) : null}
+                  {order.shipment.status === "in_transit" ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={shipBusy}
+                      onClick={() => advanceShipment("delivered")}
+                    >
+                      Simulate: delivered
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-            <div className="flex gap-2">
-              {order.shipment.status === "booked" && (
-                <button
-                  disabled={shipBusy}
-                  onClick={() => advanceShipment("in_transit")}
-                  className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                >
-                  Simulate: mark in transit
-                </button>
-              )}
-              {order.shipment.status === "in_transit" && (
-                <button
-                  disabled={shipBusy}
-                  onClick={() => advanceShipment("delivered")}
-                  className="rounded-md border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950"
-                >
-                  Simulate: mark delivered
-                </button>
-              )}
-            </div>
-          </div>
-          {shipError && (
-            <p className="mt-2 text-sm text-red-600 dark:text-red-400">{shipError}</p>
-          )}
-          <ul className="mt-3 space-y-1 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
-            {order.shipment.events.map((e) => (
-              <li key={e.id}>
-                {formatDateTime(e.occurred_at)} — {e.status_display}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Module 4/5/6: customer dispatch history */}
-      {(order.notifications ?? []).length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="border-b border-zinc-200 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-            Customer notifications
-          </div>
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {(order.notifications ?? []).map((n) => (
-              <li
-                key={n.id}
-                className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm"
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill
+                tone={
+                  order.shipment_job?.status === "failed"
+                    ? "critical"
+                    : "warning"
+                }
+                variant={
+                  order.shipment_job?.status === "failed" ? "solid" : "outline"
+                }
               >
-                <div>
-                  <span className="font-medium">{n.kind_display}</span>
-                  <span className="ml-2 text-zinc-500">
-                    via {n.channel_display} → {n.recipient || "—"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  {n.status === "sent" && (
-                    <span className="text-xs text-zinc-500">
-                      {n.latency_seconds !== null
-                        ? `${n.latency_seconds.toFixed(1)}s latency`
-                        : formatDateTime(n.sent_at)}
-                    </span>
-                  )}
-                  {n.status === "scheduled" && n.scheduled_for && (
-                    <span className="text-xs text-zinc-500">
-                      due {formatDateTime(n.scheduled_for)}
-                    </span>
-                  )}
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      n.status === "sent"
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                        : n.status === "failed"
-                          ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                          : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                    }`}
-                  >
-                    {n.status_display}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+                {order.shipment_job?.status === "retry"
+                  ? "Retry scheduled"
+                  : order.shipment_job?.status === "failed"
+                    ? "Booking failed"
+                    : order.shipment_job?.status === "processing"
+                      ? "Booking courier…"
+                      : "Queued"}
+              </StatusPill>
+              <span className="tabular text-xs text-secondary">
+                attempt {order.shipment_job?.attempts ?? 0}/
+                {order.shipment_job?.max_attempts ?? 0}
+              </span>
+              {user?.is_manager && order.shipment_job?.error ? (
+                <p className="w-full text-xs text-critical-text">
+                  {order.shipment_job.error}
+                </p>
+              ) : null}
+            </div>
+          )}
 
-      {/* Raw payload (audit) */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          {shipError ? (
+            <p className="mt-3 text-sm text-critical-text">{shipError}</p>
+          ) : null}
+
+          {order.shipment ? (
+            <ul className="mt-4 flex flex-col gap-1.5 border-t border-subtle pt-3">
+              {order.shipment.events.map((e) => (
+                <li
+                  key={e.id}
+                  className="flex items-center gap-2 text-xs text-secondary"
+                >
+                  <span className="tabular font-mono">
+                    {formatDateTime(e.occurred_at)}
+                  </span>
+                  <ChevronRight aria-hidden className="size-3 text-muted" />
+                  {e.status_display}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Panel>
+      ) : null}
+
+      {pollStopped && hasActiveAutomation(order) ? (
+        <Button
+          variant="secondary"
+          className="self-start"
+          onClick={async () => {
+            pollAttempts.current = 0;
+            setPollStopped(false);
+            setPollCycle((cycle) => cycle + 1);
+            setOrder(await ordersApi.get(id));
+          }}
+        >
+          Refresh automation status
+        </Button>
+      ) : null}
+
+      {(order.notifications ?? []).length > 0 ? (
+        <Panel
+          eyebrow="Customer contact"
+          title="Notifications sent"
+          icon={Bell}
+          bodyClassName="divide-y divide-subtle"
+        >
+          {(order.notifications ?? []).map((n) => (
+            <div
+              key={n.id}
+              className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm"
+            >
+              <div className="min-w-0">
+                <span className="font-medium text-primary">
+                  {n.kind_display}
+                </span>
+                <span className="ml-2 text-secondary">
+                  via {n.channel_display} → {n.recipient || "—"}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                {n.status === "sent" ? (
+                  <span className="tabular text-xs text-muted">
+                    {n.latency_seconds !== null
+                      ? `${n.latency_seconds.toFixed(1)}s latency`
+                      : formatDateTime(n.sent_at)}
+                  </span>
+                ) : null}
+                {n.status === "scheduled" && n.scheduled_for ? (
+                  <span className="tabular text-xs text-muted">
+                    due {formatDateTime(n.scheduled_for)}
+                  </span>
+                ) : null}
+                <LookPill look={NOTIFICATION_STATUS[n.status]}>
+                  {n.status_display}
+                </LookPill>
+              </div>
+              {user?.is_manager && n.error ? (
+                <p className="basis-full text-right text-xs text-critical-text">
+                  {n.error}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </Panel>
+      ) : null}
+
+      <Panel bodyClassName="p-4">
         <button
           onClick={() => setShowRaw((v) => !v)}
-          className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+          className="flex items-center gap-1.5 text-sm font-medium text-secondary transition-colors duration-150 hover:text-primary"
         >
-          {showRaw ? "▾" : "▸"} Raw channel payload
+          <Code2 aria-hidden className="size-4" />
+          <ChevronRight
+            aria-hidden
+            className={cn(
+              "size-3.5 transition-transform duration-150",
+              showRaw && "rotate-90",
+            )}
+          />
+          Raw channel payload
         </button>
-        {showRaw && (
-          <pre className="mt-3 overflow-x-auto rounded-lg bg-zinc-50 p-3 text-xs text-zinc-700 dark:bg-zinc-950 dark:text-zinc-300">
+        {showRaw ? (
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-sunken p-3 text-xs text-secondary">
             {JSON.stringify(order.raw_payload ?? {}, null, 2)}
           </pre>
-        )}
-      </div>
+        ) : null}
+      </Panel>
     </div>
   );
 }

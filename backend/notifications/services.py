@@ -1,23 +1,27 @@
-"""Dispatch pipeline for the shared Notification ledger.
-
-dispatch() is the single writer: every Module 4/5/6 send goes through it, so the
-KPI #2 latency proof (sent_at - reference_event_at) and the failure-isolation
-behaviour (a bad send never raises into the caller's transaction — inventory,
-packing and shipment booking must never fail because a WhatsApp send failed) live
-in one place. scheduled_for support means the same function serves both an
-instant dispatch (Module 4/5) and a delayed one (Module 6's review reminder)
-without a task queue: dispatch_due_scheduled() is the manual "cron tick", run by
-a management command the same way sync_orders stands in for a real scheduler.
-"""
+"""Durable notification outbox shared by packaging, shipment, and reviews."""
 
 from __future__ import annotations
 
+import hashlib
+from datetime import timedelta
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 
-from .channels import get_channel
-from .models import Notification
+from common.redaction import redact_provider_payload
+from operations.exceptions import PermanentWorkError
+from operations.services import enqueue, process_due, retry_delay_seconds
 
+from .channels import get_channel
+from .models import Notification, NotificationDeliveryEvent
+
+SEND_NOTIFICATION_KIND = "send_notification"
 DEFAULT_CHANNELS = (Notification.Channel.EMAIL, Notification.Channel.WHATSAPP)
+DELIVERED_PROVIDER_STATUSES = frozenset({"delivered", "read"})
+FAILED_PROVIDER_STATUSES = frozenset({"failed", "undelivered", "rejected"})
 
 _RECIPIENT_FIELD = {
     Notification.Channel.EMAIL: "customer_email",
@@ -25,23 +29,13 @@ _RECIPIENT_FIELD = {
 }
 
 
-def _send(notification: Notification) -> Notification:
-    """Attempt one send and record the outcome. Never raises."""
-    try:
-        channel = get_channel(notification.channel)
-        detail = channel.send(notification)
-        notification.status = Notification.Status.SENT
-        notification.sent_at = timezone.now()
-        if detail:
-            notification.payload = {**notification.payload, **detail}
-        notification.save(update_fields=["status", "sent_at", "payload"])
-    except Exception as exc:  # noqa: BLE001 - log the failure, never break the caller
-        notification.status = Notification.Status.FAILED
-        notification.error = str(exc)
-        notification.save(update_fields=["status", "error"])
-    return notification
+def _business_key(order, kind, channel, event_key) -> str:
+    material = f"{order.pk}|{kind}|{channel}|{event_key}".encode("utf-8")
+    digest = hashlib.sha256(material).hexdigest()
+    return f"notification:{digest}"
 
 
+@transaction.atomic
 def dispatch(
     order,
     *,
@@ -50,66 +44,447 @@ def dispatch(
     payload: dict,
     channels=DEFAULT_CHANNELS,
     scheduled_for=None,
+    event_key: str | None = None,
+    max_attempts: int = 5,
 ) -> list[Notification]:
-    """Create one Notification per channel and send it now unless scheduled_for
-    is in the future. Always returns the created rows, sent or not — a missing
-    recipient or a channel error lands as status=FAILED, not an exception."""
-    now = timezone.now()
-    created = []
+    """Persist one idempotent outbox row/job per channel; never send inline."""
+    event_key = event_key or reference_event_at.isoformat()
+    available_at = scheduled_for or timezone.now()
+    rows = []
     for channel in channels:
-        notification = Notification.objects.create(
-            order=order,
-            kind=kind,
-            channel=channel,
-            recipient=getattr(order, _RECIPIENT_FIELD[channel], "") or "",
-            reference_event_at=reference_event_at,
-            scheduled_for=scheduled_for,
-            payload=payload,
+        recipient = getattr(order, _RECIPIENT_FIELD[channel], "") or ""
+        if not recipient:
+            # The order has no contact info for this channel — e.g. Daraz's
+            # Seller Center API never exposes the buyer's email to sellers,
+            # only phone/address. Attempting delivery would only manufacture
+            # a permanent failure for a channel this order can never reach;
+            # skip it instead. latency_report() only requires channels an
+            # order actually has a recipient for.
+            continue
+        idempotency_key = _business_key(order, kind, channel, event_key)
+        notification, created = Notification.objects.get_or_create(
+            idempotency_key=idempotency_key,
+            defaults={
+                "order": order,
+                "kind": kind,
+                "channel": channel,
+                "recipient": recipient,
+                "reference_event_at": reference_event_at,
+                "scheduled_for": scheduled_for,
+                "next_attempt_at": available_at,
+                "payload": payload,
+            },
         )
-        if scheduled_for is None or scheduled_for <= now:
-            _send(notification)
-        created.append(notification)
-    return created
+        if not created and (
+            notification.order_id != order.pk
+            or notification.kind != kind
+            or notification.channel != channel
+            or notification.payload != payload
+        ):
+            raise ValueError(
+                f"Notification event key {idempotency_key!r} was reused "
+                "with different immutable content."
+            )
+        enqueue(
+            SEND_NOTIFICATION_KIND,
+            str(notification.pk),
+            {"notification_id": notification.pk},
+            available_at=available_at,
+            max_attempts=max_attempts,
+        )
+        rows.append(notification)
+    return rows
 
 
-def dispatch_due_scheduled(*, now=None) -> list[Notification]:
-    """Send every SCHEDULED notification whose time has come. The cron-proxy
-    sweep for Module 6's review reminder (and anything else scheduled later)."""
-    now = now or timezone.now()
-    due = Notification.objects.filter(
-        status=Notification.Status.SCHEDULED, scheduled_for__lte=now
+def _record_failure(notification, item, exc, *, terminal: bool):
+    now = timezone.now()
+    notification.attempt_count = item.attempts
+    notification.error = str(exc)
+    notification.terminal_error_class = exc.__class__.__name__ if terminal else ""
+    notification.status = (
+        Notification.Status.FAILED if terminal else Notification.Status.RETRYING
     )
-    return [_send(n) for n in due]
+    notification.next_attempt_at = (
+        None
+        if terminal
+        else now + timedelta(seconds=retry_delay_seconds(item.attempts))
+    )
+    notification.save(
+        update_fields=[
+            "attempt_count",
+            "error",
+            "terminal_error_class",
+            "status",
+            "next_attempt_at",
+        ]
+    )
+
+
+class NotificationWebhookConflict(Exception):
+    pass
+
+
+class ProviderContractError(ValueError):
+    pass
+
+
+def _finish_delivery_event(
+    event: NotificationDeliveryEvent,
+    *,
+    outcome: str,
+    notification: Notification | None = None,
+    error_code: str = "",
+) -> NotificationDeliveryEvent:
+    event.notification = notification
+    event.outcome = outcome
+    event.error_code = error_code
+    event.processed_at = timezone.now()
+    event.save(
+        update_fields=[
+            "notification",
+            "outcome",
+            "error_code",
+            "processed_at",
+        ]
+    )
+    return event
+
+
+@transaction.atomic
+def process_delivery_receipt(
+    channel: str, payload: dict, *, raw_body: bytes
+) -> tuple[NotificationDeliveryEvent, bool]:
+    """Deduplicate and apply one already-authenticated provider receipt."""
+    if channel not in Notification.Channel.values:
+        raise ValidationError("Unknown notification channel.")
+    provider_event_id = str(payload.get("event_id", "")).strip()
+    provider_message_id = str(payload.get("provider_message_id", "")).strip()
+    provider_status = str(payload.get("status", "")).strip().lower()
+    if not provider_event_id or len(provider_event_id) > 128:
+        raise ValidationError("A valid provider event_id is required.")
+
+    payload_hash = hashlib.sha256(raw_body).hexdigest()
+    event, created = NotificationDeliveryEvent.objects.get_or_create(
+        channel=channel,
+        provider_event_id=provider_event_id,
+        defaults={
+            "provider_message_id": provider_message_id[:255],
+            "provider_status": provider_status[:64],
+            "payload_hash": payload_hash,
+            "redacted_payload": redact_provider_payload(payload),
+        },
+    )
+    if not created:
+        if event.payload_hash != payload_hash:
+            raise NotificationWebhookConflict(
+                "A provider event ID was reused with different content."
+            )
+        return event, True
+
+    if not provider_message_id or len(provider_message_id) > 255:
+        return (
+            _finish_delivery_event(
+                event,
+                outcome=NotificationDeliveryEvent.Outcome.REJECTED,
+                error_code=(
+                    "missing_provider_message_id"
+                    if not provider_message_id
+                    else "invalid_provider_message_id"
+                ),
+            ),
+            False,
+        )
+
+    notification = (
+        Notification.objects.select_for_update()
+        .select_related("order")
+        .filter(channel=channel, provider_message_id=provider_message_id)
+        .first()
+    )
+    if notification is None:
+        return (
+            _finish_delivery_event(
+                event,
+                outcome=NotificationDeliveryEvent.Outcome.REJECTED,
+                error_code="unknown_provider_message_id",
+            ),
+            False,
+        )
+
+    if notification.status == Notification.Status.SENT and notification.acknowledged_at:
+        return (
+            _finish_delivery_event(
+                event,
+                outcome=NotificationDeliveryEvent.Outcome.IGNORED,
+                notification=notification,
+            ),
+            False,
+        )
+
+    if provider_status in FAILED_PROVIDER_STATUSES:
+        notification.status = Notification.Status.FAILED
+        notification.error = f"Provider reported {provider_status}."
+        notification.terminal_error_class = "ProviderDeliveryFailure"
+        notification.next_attempt_at = None
+        notification.save(
+            update_fields=[
+                "status",
+                "error",
+                "terminal_error_class",
+                "next_attempt_at",
+            ]
+        )
+        return (
+            _finish_delivery_event(
+                event,
+                outcome=NotificationDeliveryEvent.Outcome.FAILED,
+                notification=notification,
+            ),
+            False,
+        )
+
+    if provider_status not in DELIVERED_PROVIDER_STATUSES:
+        return (
+            _finish_delivery_event(
+                event,
+                outcome=NotificationDeliveryEvent.Outcome.REJECTED,
+                notification=notification,
+                error_code="unknown_status",
+            ),
+            False,
+        )
+
+    notification.status = Notification.Status.SENT
+    notification.acknowledged_at = timezone.now()
+    notification.error = ""
+    notification.terminal_error_class = ""
+    notification.next_attempt_at = None
+    notification.save(
+        update_fields=[
+            "status",
+            "acknowledged_at",
+            "error",
+            "terminal_error_class",
+            "next_attempt_at",
+        ]
+    )
+    return (
+        _finish_delivery_event(
+            event,
+            outcome=NotificationDeliveryEvent.Outcome.DELIVERED,
+            notification=notification,
+        ),
+        False,
+    )
+
+
+def process_notification_work(item):
+    """Worker handler for one Notification outbox row."""
+    notification = Notification.objects.select_related("order").get(
+        pk=item.payload["notification_id"]
+    )
+    if notification.status in {
+        Notification.Status.SENT,
+        Notification.Status.ACCEPTED,
+    }:
+        return notification
+
+    notification.status = Notification.Status.PROCESSING
+    notification.attempt_count = item.attempts
+    notification.next_attempt_at = None
+    notification.save(
+        update_fields=["status", "attempt_count", "next_attempt_at"]
+    )
+
+    if not notification.recipient:
+        field = _RECIPIENT_FIELD[notification.channel]
+        exc = ValueError(f"Order has no {field} on file.")
+        _record_failure(notification, item, exc, terminal=True)
+        raise PermanentWorkError(str(exc))
+
+    try:
+        detail = get_channel(notification.channel).send(notification)
+    except Exception as exc:
+        terminal = item.attempts >= item.max_attempts
+        _record_failure(notification, item, exc, terminal=terminal)
+        raise
+
+    if detail is None:
+        detail = {}
+    if not isinstance(detail, dict):
+        exc = ProviderContractError("Provider send result must be an object.")
+        _record_failure(notification, item, exc, terminal=True)
+        raise PermanentWorkError(str(exc))
+
+    now = timezone.now()
+    acknowledged = detail.get("acknowledged", True)
+    if not isinstance(acknowledged, bool):
+        exc = ProviderContractError(
+            "Provider acknowledged result must be a boolean."
+        )
+        _record_failure(notification, item, exc, terminal=True)
+        raise PermanentWorkError(str(exc))
+    provider_message_id = str(detail.get("provider_message_id", "")).strip()
+    if len(provider_message_id) > 255:
+        exc = ProviderContractError("Provider message ID exceeds 255 characters.")
+        _record_failure(notification, item, exc, terminal=True)
+        raise PermanentWorkError(str(exc))
+    if not acknowledged and not provider_message_id:
+        exc = ProviderContractError(
+            "An unacknowledged provider acceptance requires a provider message ID."
+        )
+        _record_failure(notification, item, exc, terminal=True)
+        raise PermanentWorkError(str(exc))
+    notification.status = (
+        Notification.Status.SENT
+        if acknowledged
+        else Notification.Status.ACCEPTED
+    )
+    notification.sent_at = now
+    notification.acknowledged_at = now if acknowledged else None
+    notification.attempt_count = item.attempts
+    notification.provider_message_id = provider_message_id
+    notification.payload = {
+        **notification.payload,
+        **redact_provider_payload(detail),
+    }
+    notification.error = ""
+    notification.terminal_error_class = ""
+    notification.next_attempt_at = None
+    notification.save(
+        update_fields=[
+            "status",
+            "sent_at",
+            "acknowledged_at",
+            "attempt_count",
+            "provider_message_id",
+            "payload",
+            "error",
+            "terminal_error_class",
+            "next_attempt_at",
+        ]
+    )
+    return notification
+
+
+def dispatch_due_scheduled(*, now=None, limit: int = 100) -> list[Notification]:
+    """Compatibility scheduler tick: drain only due notification jobs."""
+    claimed = process_due(
+        limit=limit,
+        worker_name="notification-scheduler",
+        now=now,
+        kinds=[SEND_NOTIFICATION_KIND],
+    )
+    ids = [item.payload["notification_id"] for item in claimed]
+    by_id = Notification.objects.in_bulk(ids)
+    return [by_id[pk] for pk in ids if pk in by_id]
 
 
 def latency_report(kind: str | None = None, *, threshold_seconds: int = 180) -> dict:
-    """KPI #2 proof: every sent notification of `kind` initiated within
-    threshold_seconds of its reference event, and nothing stuck un-sent."""
-    qs = Notification.objects.all()
+    """Strict send-acknowledgement and required-channel evidence report."""
+    qs = Notification.objects.select_related("order")
     if kind:
         qs = qs.filter(kind=kind)
 
-    sent = list(qs.filter(status=Notification.Status.SENT))
-    breaches = [n for n in sent if (n.latency_seconds or 0) > threshold_seconds]
-    # "Stuck" = still SCHEDULED past its own due time — dispatch() always sends
-    # a None/past scheduled_for immediately, so the only way a row stays
-    # SCHEDULED is a real future scheduled_for; once that time has passed
-    # without dispatch_due_scheduled() picking it up, it's missed, not merely
-    # waiting. (Filtering scheduled_for__isnull=True here would never match
-    # anything, since that case is sent inline and never reaches SCHEDULED.)
-    stuck = list(
-        qs.filter(status=Notification.Status.SCHEDULED, scheduled_for__lte=timezone.now())
+    now = timezone.now()
+    sent = list(
+        qs.filter(
+            status=Notification.Status.SENT,
+            acknowledged_at__isnull=False,
+        )
     )
-    failed = qs.filter(status=Notification.Status.FAILED).count()
+    unacknowledged = list(
+        qs.filter(status=Notification.Status.ACCEPTED)
+    ) + list(
+        qs.filter(
+            status=Notification.Status.SENT,
+            acknowledged_at__isnull=True,
+        )
+    )
+    breaches = [n for n in sent if (n.latency_seconds or 0) > threshold_seconds]
+    failed_rows = list(qs.filter(status=Notification.Status.FAILED))
 
-    latencies = [n.latency_seconds for n in sent if n.latency_seconds is not None]
+    active_statuses = [
+        Notification.Status.SCHEDULED,
+        Notification.Status.PROCESSING,
+        Notification.Status.RETRYING,
+    ]
+    if kind == Notification.Kind.PACKAGING_VIDEO:
+        stuck = list(qs.filter(status__in=active_statuses)) + unacknowledged
+    else:
+        stuck = list(
+            qs.filter(
+                status=Notification.Status.SCHEDULED,
+                scheduled_for__lte=now,
+            )
+        ) + list(
+            qs.filter(
+                status__in=[
+                    Notification.Status.PROCESSING,
+                    Notification.Status.RETRYING,
+                ]
+            )
+        ) + unacknowledged
+
+    required_missing = []
+    if kind == Notification.Kind.PACKAGING_VIDEO:
+        configured = set(settings.NOTIFICATION_REQUIRED_CHANNELS)
+        events: dict[tuple, dict] = {}
+        for row in qs:
+            bucket = events.setdefault(
+                (row.order_id, row.reference_event_at),
+                {"present": set(), "order": row.order},
+            )
+            bucket["present"].add(row.channel)
+        for (order_id, reference), bucket in events.items():
+            order = bucket["order"]
+            # Only channels this order actually has a recipient for are
+            # "required" — dispatch() never creates a row for one it can't
+            # reach, so demanding it here would just reintroduce the same
+            # false alarm as a manufactured failure would have.
+            reachable = {
+                channel
+                for channel in configured
+                if (getattr(order, _RECIPIENT_FIELD[channel], "") or "")
+            }
+            missing = sorted(reachable - bucket["present"])
+            if missing:
+                required_missing.append(
+                    {
+                        "order_id": order_id,
+                        "reference_event_at": reference,
+                        "channels": missing,
+                    }
+                )
+
+    duplicate_groups = list(
+        qs.values("order_id", "kind", "channel", "reference_event_at")
+        .annotate(count=Count("id"))
+        .filter(count__gt=1)
+    )
+    evidence_count = len(sent)
+    evidence_required = kind == Notification.Kind.PACKAGING_VIDEO
     return {
         "kind": kind,
-        "sent": len(sent),
-        "failed": failed,
+        "sent": evidence_count,
+        "evidence_count": evidence_count,
+        "failed": len(failed_rows),
         "stuck": len(stuck),
-        "max_latency_seconds": max(latencies) if latencies else None,
+        "pending": len(stuck),
+        "missing_required_channels": required_missing,
+        "duplicates": duplicate_groups,
+        "max_latency_seconds": (
+            max(n.latency_seconds for n in sent) if sent else None
+        ),
         "breaches": breaches,
         "stuck_detail": stuck,
-        "ok": not breaches and not stuck,
+        "failed_detail": failed_rows,
+        "ok": (
+            (not evidence_required or evidence_count > 0)
+            and not breaches
+            and not stuck
+            and not failed_rows
+            and not required_missing
+            and not duplicate_groups
+        ),
     }

@@ -115,8 +115,11 @@ export interface PurchaseOrderLine {
   product: number;
   product_sku: string;
   product_name: string;
+  supplier_product: number | null;
   quantity_ordered: number;
   unit_price: string;
+  effective_lead_time_days: number;
+  price_tier_min_quantity: number | null;
   quantity_received: number;
   quantity_outstanding: number;
   line_total: string;
@@ -181,6 +184,8 @@ export interface SalesOrder {
   external_id: string;
   status: OrderStatus;
   status_display: string;
+  source_status: OrderStatus;
+  source_status_display: string;
   customer_name: string;
   item_count: number;
   currency: string;
@@ -192,6 +197,21 @@ export interface SalesOrder {
   customer_phone?: string;
   customer_email?: string;
   shipping_address?: string;
+  shipping_address_line1?: string;
+  shipping_address_line2?: string;
+  shipping_city?: string;
+  shipping_province?: string;
+  shipping_postal_code?: string;
+  shipping_country?: string;
+  customer_instructions?: string;
+  parcel_weight_kg?: string;
+  parcel_length_cm?: string;
+  parcel_width_cm?: string;
+  parcel_height_cm?: string;
+  cod_amount?: string;
+  payment_mode?: "prepaid" | "cod";
+  shipping_service_type?: string;
+  pickup_account?: string;
   subtotal?: string;
   shipping_fee?: string;
   raw_payload?: Record<string, unknown>;
@@ -199,6 +219,7 @@ export interface SalesOrder {
   // Present only on the detail endpoint — Module 4/5/6 dispatch history.
   notifications?: NotificationRecord[];
   shipment?: Shipment | null;
+  shipment_job?: ShipmentJob | null;
 }
 
 export interface SyncRun {
@@ -214,15 +235,37 @@ export interface SyncRun {
   failed: number;
   ok: boolean;
   reconciled: boolean;
+  detail: {
+    fetch_error?: string;
+    errors?: { record_index?: number; external_id?: string; error: string }[];
+  };
 }
 
 export interface QueueIntegrity {
   dropped: number;
+  stale: number;
   duplicated: number;
+  mismatched: number;
   unique: number;
   ok: boolean;
+  required_channels: string[];
+  channels_checked: number;
+  channels_checked_detail: string[];
+  inspected_records: number;
+  channel_errors: {
+    channel: string;
+    stage: string;
+    error: string;
+    external_id?: string;
+  }[];
   dropped_detail: { channel: string; external_id: string }[];
+  stale_detail: { channel: string; external_id: string }[];
   duplicated_detail: { channel: string; external_id: string; count: number }[];
+  mismatched_detail: {
+    channel: string;
+    external_id: string;
+    fields: string[];
+  }[];
 }
 
 export interface ChannelSummary {
@@ -241,8 +284,10 @@ export interface OrderSummary {
 }
 
 export interface SyncResponse {
+  overall_ok: boolean;
   runs: SyncRun[];
   summary: OrderSummary;
+  detail: string;
 }
 
 // --- Module 3: Fulfilment / barcode verification ---
@@ -309,6 +354,7 @@ export interface PackSession {
   recording: PackagingRecording | null;
   video_notifications: NotificationRecord[];
   shipment: Shipment | null;
+  shipment_job: ShipmentJob | null;
 }
 
 export interface ScanResponse {
@@ -321,7 +367,9 @@ export interface ScanResponse {
 export type RecordingStatus =
   | "pending"
   | "recording"
+  | "queued"
   | "processing"
+  | "retrying"
   | "ready"
   | "failed";
 
@@ -329,14 +377,24 @@ export interface PackagingRecording {
   id: number;
   status: RecordingStatus;
   status_display: string;
+  requires_client_upload: boolean;
   video_url: string | null;
   duration_seconds: number | null;
   raw_size_bytes: number | null;
   compressed_size_bytes: number | null;
-  sealed_at: string;
+  raw_checksum: string;
+  compressed_checksum: string;
+  sealed_at: string | null;
+  capture_started_at: string | null;
+  capture_stopped_at: string | null;
   captured_at: string | null;
   compressed_at: string | null;
+  processing_attempts: number;
+  next_attempt_at: string | null;
   error: string;
+  terminal_error_class: string;
+  raw_deleted_at: string | null;
+  compressed_deleted_at: string | null;
 }
 
 export type NotificationKind =
@@ -344,7 +402,13 @@ export type NotificationKind =
   | "shipment_tracking"
   | "review_request";
 export type NotificationChannelType = "email" | "whatsapp";
-export type NotificationDeliveryStatus = "scheduled" | "sent" | "failed";
+export type NotificationDeliveryStatus =
+  | "scheduled"
+  | "processing"
+  | "retrying"
+  | "accepted"
+  | "sent"
+  | "failed";
 
 export interface NotificationRecord {
   id: number;
@@ -352,15 +416,21 @@ export interface NotificationRecord {
   kind_display: string;
   channel: NotificationChannelType;
   channel_display: string;
+  idempotency_key: string;
   recipient: string;
   status: NotificationDeliveryStatus;
   status_display: string;
   reference_event_at: string;
   scheduled_for: string | null;
+  next_attempt_at: string | null;
   sent_at: string | null;
+  acknowledged_at: string | null;
+  attempt_count: number;
+  provider_message_id: string;
   latency_seconds: number | null;
   payload: Record<string, unknown>;
   error: string;
+  terminal_error_class: string;
   created_at: string;
 }
 
@@ -384,9 +454,123 @@ export interface Shipment {
   status: ShipmentStatus;
   status_display: string;
   tracking_number: string;
+  provider_booking_id: string | null;
+  request_idempotency_key: string;
+  label_reference: string;
   label_url: string;
   booked_at: string;
   in_transit_at: string | null;
   delivered_at: string | null;
   events: ShipmentEvent[];
+}
+
+export type WorkStatus =
+  | "pending"
+  | "processing"
+  | "retry"
+  | "succeeded"
+  | "failed";
+
+export interface ShipmentJob {
+  status: WorkStatus;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  error: string;
+  completed_at: string | null;
+}
+
+export interface OperationalHealth {
+  ok: boolean;
+  checked_at: string;
+  components: {
+    app: { ok: boolean };
+    database: { ok: boolean; error_class?: string };
+    worker: {
+      ok: boolean;
+      name?: string;
+      age_seconds: number | null;
+      last_claimed?: number;
+      last_succeeded?: number;
+      last_failed?: number;
+      detail?: string;
+    };
+    backlog: {
+      ok: boolean;
+      due: number;
+      oldest_due_age_seconds: number;
+      failed: number;
+      processing: number;
+    };
+    media: {
+      ok: boolean;
+      exists: boolean;
+      writable: boolean;
+      free_bytes: number;
+      retention_policy_ok: boolean;
+    };
+    adapters: {
+      ok: boolean;
+      live_required: boolean;
+      all_live: boolean;
+      details: {
+        name: string;
+        ok: boolean;
+        mode: string;
+        error_class?: string;
+      }[];
+    };
+  };
+}
+
+export interface OperationalMetrics {
+  ok: boolean;
+  checked_at: string;
+  window: { hours: number; starts_at: string };
+  queue: {
+    active: number;
+    due: number;
+    retrying: number;
+    failed: number;
+    processing: number;
+    oldest_due_age_seconds: number;
+  };
+  sources: {
+    channels: {
+      channel: "burk" | "daraz";
+      last_finished_at: string | null;
+      lag_seconds: number | null;
+      failed_runs: number;
+    }[];
+    missing: string[];
+    max_lag_seconds: number | null;
+    failed_runs: number;
+  };
+  packing: {
+    scans: number;
+    mismatches_intercepted: number;
+    overscans_intercepted: number;
+  };
+  notifications: {
+    total: number;
+    acknowledged: number;
+    awaiting_acknowledgement: number;
+    failed: number;
+    average_latency_seconds: number | null;
+    max_latency_seconds: number | null;
+  };
+  shipments: { booking_failures: number };
+  media: {
+    total: number;
+    processed: number;
+    failed: number;
+    average_processing_seconds: number | null;
+    max_processing_seconds: number | null;
+  };
+  thresholds: Record<string, number>;
+  breaches: {
+    code: string;
+    value: number | null;
+    threshold: number | string;
+  }[];
 }

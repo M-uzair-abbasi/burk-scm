@@ -8,10 +8,13 @@ __pycache__/
 *.sqlite3
 /backend/media/
 /backend/staticfiles/
+/backups/
 
 # Env
 .env
 .env.local
+.env.production
+.env.*.local
 
 # Node / Next
 node_modules/
@@ -23,3 +26,6 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+.local-logs/
+*.sqlite3-wal
+*.sqlite3-shm

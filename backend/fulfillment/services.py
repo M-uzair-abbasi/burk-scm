@@ -22,6 +22,16 @@ from .models import PackingSession, PackScan
 PACKABLE_STATUSES = {SalesOrder.Status.PENDING, SalesOrder.Status.CONFIRMED}
 
 
+def _validate_packable_lines(order: SalesOrder) -> list[SalesOrderLine]:
+    """Return the order lines only when they form a valid packing checklist."""
+    lines = list(order.lines.select_related("product"))
+    if not lines:
+        raise ValidationError(f"{order.reference} must contain at least one line.")
+    if any(line.quantity <= 0 for line in lines):
+        raise ValidationError(f"{order.reference} contains a non-positive quantity.")
+    return lines
+
+
 def start_packing(order: SalesOrder, *, user=None) -> PackingSession:
     """Open (or resume) the packing session for an order."""
     existing = order.packing_sessions.filter(
@@ -33,6 +43,7 @@ def start_packing(order: SalesOrder, *, user=None) -> PackingSession:
         raise ValidationError(
             f"{order.reference} is {order.get_status_display()}, not awaiting packing."
         )
+    _validate_packable_lines(order)
     return PackingSession.objects.create(order=order, operator=user)
 
 
@@ -49,9 +60,10 @@ def _scanned_counts(session: PackingSession) -> dict:
 def session_progress(session: PackingSession) -> dict:
     """Per-line required/scanned/complete plus an overall flag."""
     counts = _scanned_counts(session)
+    order_lines = list(session.order.lines.all())
     lines = []
-    all_done = True
-    for line in session.order.lines.all():
+    all_done = bool(order_lines)
+    for line in order_lines:
         scanned = counts.get(line.id, 0)
         complete = scanned >= line.quantity
         all_done = all_done and complete
@@ -116,6 +128,8 @@ def confirm_line_manual(
         raise ValidationError("This packing session is not in progress.")
     if line.order_id != session.order_id:
         raise ValidationError("That line does not belong to this order.")
+    if line.product_id is not None and line.product.barcode:
+        raise ValidationError(f"{line.product_name} has a barcode and must be scanned.")
     counts = _scanned_counts(session)
     if counts.get(line.id, 0) >= line.quantity:
         raise ValidationError(f"{line.product_name} is already fully packed.")
@@ -133,10 +147,20 @@ def confirm_line_manual(
 @transaction.atomic
 def complete_packing(session: PackingSession, *, user=None) -> SalesOrder:
     """Finish packing: verify every line, decrement stock, mark the order Packed."""
-    if session.status != PackingSession.Status.IN_PROGRESS:
+    locked_session = (
+        PackingSession.objects.select_for_update()
+        .select_related("order")
+        .get(pk=session.pk)
+    )
+    if locked_session.status == PackingSession.Status.COMPLETED:
+        return locked_session.order
+    if locked_session.status != PackingSession.Status.IN_PROGRESS:
         raise ValidationError("This packing session is not in progress.")
 
-    progress = session_progress(session)
+    order = SalesOrder.objects.select_for_update().get(pk=locked_session.order_id)
+    locked_session.order = order
+    _validate_packable_lines(order)
+    progress = session_progress(locked_session)
     if not progress["complete"]:
         outstanding = [
             f"{p['line'].product_name} ({p['scanned']}/{p['required']})"
@@ -145,7 +169,6 @@ def complete_packing(session: PackingSession, *, user=None) -> SalesOrder:
         ]
         raise ValidationError("Not all items are verified: " + ", ".join(outstanding))
 
-    order = session.order
     for p in progress["lines"]:
         line = p["line"]
         if line.product_id is None:
@@ -160,9 +183,11 @@ def complete_packing(session: PackingSession, *, user=None) -> SalesOrder:
 
     order.status = SalesOrder.Status.PACKED
     order.save(update_fields=["status", "updated_at"])
-    session.status = PackingSession.Status.COMPLETED
-    session.completed_at = timezone.now()
-    session.save(update_fields=["status", "completed_at"])
+    locked_session.status = PackingSession.Status.COMPLETED
+    locked_session.completed_at = timezone.now()
+    locked_session.save(update_fields=["status", "completed_at"])
+    session.status = locked_session.status
+    session.completed_at = locked_session.completed_at
     return order
 
 

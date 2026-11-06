@@ -1,21 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ClipboardList, TriangleAlert } from "lucide-react";
 
 import { useAuth } from "@/components/AuthProvider";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Panel } from "@/components/ui/Panel";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { LookPill } from "@/components/ui/StatusPill";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
+import { Term } from "@/components/ui/Tooltip";
+import { PO_STATUS } from "@/components/ui/status";
 import { ApiError } from "@/lib/api";
 import { purchaseOrders } from "@/lib/resources";
 import { formatDate, formatPKR } from "@/lib/format";
-import type { POStatus, PurchaseOrder } from "@/lib/types";
-
-const STATUS_STYLES: Record<POStatus, string> = {
-  draft: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  submitted: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  partially_received:
-    "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  received: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-  cancelled: "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800",
-};
+import type { PurchaseOrder } from "@/lib/types";
 
 export default function PurchaseOrdersPage() {
   const { user } = useAuth();
@@ -32,8 +32,20 @@ export default function PurchaseOrdersPage() {
   }, []);
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    let alive = true;
+    purchaseOrders
+      .list()
+      .then((r) => {
+        if (alive) setPos(r.results);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function act(id: number, fn: () => Promise<unknown>) {
     setError(null);
@@ -48,100 +60,144 @@ export default function PurchaseOrdersPage() {
     }
   }
 
-  if (loading) return <p className="text-sm text-zinc-500">Loading…</p>;
-
   return (
-    <div className="space-y-4">
-      {error && (
-        <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Purchase orders"
+        description="Restock requests raised against your suppliers. Receiving one puts its stock back on the shelf automatically — you never adjust quantities by hand."
+      />
+
+      {error ? (
+        <div className="flex items-center gap-2 rounded-lg border border-critical/30 bg-critical-soft px-4 py-2.5 text-sm text-critical-text">
+          <TriangleAlert aria-hidden className="size-4 shrink-0" />
           {error}
         </div>
-      )}
+      ) : null}
 
-      {pos.length === 0 ? (
-        <div className="rounded-xl border border-zinc-200 bg-white px-5 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
-          No purchase orders yet. Reorder a low-stock product to create one.
-        </div>
+      {loading ? (
+        <Panel bodyClassName="px-5 py-12">
+          <p className="text-center text-sm text-secondary">
+            Loading purchase orders…
+          </p>
+        </Panel>
+      ) : pos.length === 0 ? (
+        /* The old version of this screen was a dead end: one grey sentence
+           telling you to "reorder a low-stock product" with no way to get
+           there. The route to the next step now ships with the message. */
+        <Panel bodyClassName="p-5">
+          <EmptyState
+            icon={ClipboardList}
+            title="No purchase orders yet"
+            body="A purchase order is how you restock. Open any product that has fallen to its safety level and choose Reorder — the preferred supplier, lead time and tier pricing are filled in for you, and a draft appears here."
+            action={
+              <ButtonLink href="/inventory?low=1" variant="primary">
+                Review low-stock items
+              </ButtonLink>
+            }
+            hint="Receiving a purchase order returns its quantities to stock automatically."
+          />
+        </Panel>
       ) : (
         pos.map((po) => (
-          <div
+          <Panel
             key={po.id}
-            className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+            bodyClassName="p-0"
+            title={po.po_number}
+            eyebrow={po.supplier_name}
+            actions={
               <div className="flex items-center gap-3">
-                <span className="font-mono text-sm font-semibold">{po.po_number}</span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[po.status]}`}
-                >
-                  {po.status_display}
-                </span>
-                <span className="text-sm text-zinc-500">{po.supplier_name}</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="text-right text-sm">
-                  <div className="font-semibold">{formatPKR(po.total_amount)}</div>
-                  <div className="text-xs text-zinc-500">
+                <div className="text-right">
+                  <div className="tabular text-sm font-semibold text-primary">
+                    {formatPKR(po.total_amount)}
+                  </div>
+                  <div className="text-xs text-muted">
                     {po.expected_date
                       ? `expected ${formatDate(po.expected_date)}`
                       : `created ${formatDate(po.created_at)}`}
                   </div>
                 </div>
-                {user?.is_manager && po.status === "draft" && (
-                  <button
+                <LookPill look={PO_STATUS[po.status]}>
+                  {po.status_display}
+                </LookPill>
+                {user?.is_manager && po.status === "draft" ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
                     disabled={busyId === po.id}
                     onClick={() => act(po.id, () => purchaseOrders.submit(po.id))}
-                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
                   >
                     {busyId === po.id ? "…" : "Submit"}
-                  </button>
-                )}
+                  </Button>
+                ) : null}
                 {user?.is_manager &&
-                  (po.status === "submitted" ||
-                    po.status === "partially_received") && (
-                    <button
-                      disabled={busyId === po.id}
-                      onClick={() => act(po.id, () => purchaseOrders.receive(po.id))}
-                      className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-                    >
-                      {busyId === po.id ? "…" : "Receive"}
-                    </button>
-                  )}
+                (po.status === "submitted" ||
+                  po.status === "partially_received") ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={busyId === po.id}
+                    onClick={() =>
+                      act(po.id, () => purchaseOrders.receive(po.id))
+                    }
+                  >
+                    {busyId === po.id ? "…" : "Receive"}
+                  </Button>
+                ) : null}
               </div>
-            </div>
-
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-100 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-                  <th className="px-5 py-2 font-medium">Product</th>
-                  <th className="px-5 py-2 text-right font-medium">Ordered</th>
-                  <th className="px-5 py-2 text-right font-medium">Received</th>
-                  <th className="px-5 py-2 text-right font-medium">Unit price</th>
-                  <th className="px-5 py-2 text-right font-medium">Line total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            }
+          >
+            <Table>
+              <THead>
+                <TH>Product</TH>
+                <TH align="right">Ordered</TH>
+                <TH align="right">Received</TH>
+                <TH align="right">Unit price</TH>
+                <TH align="right">Line total</TH>
+              </THead>
+              <TBody>
                 {po.lines.map((l) => (
-                  <tr key={l.id}>
-                    <td className="px-5 py-2">
-                      <span className="font-medium">{l.product_name}</span>
-                      <span className="ml-2 font-mono text-xs text-zinc-500">
+                  <TR key={l.id}>
+                    <TD>
+                      <span className="font-medium text-primary">
+                        {l.product_name}
+                      </span>
+                      <span className="tabular ml-2 font-mono text-xs text-muted">
                         {l.product_sku}
                       </span>
-                    </td>
-                    <td className="px-5 py-2 text-right">{l.quantity_ordered}</td>
-                    <td className="px-5 py-2 text-right">{l.quantity_received}</td>
-                    <td className="px-5 py-2 text-right">{formatPKR(l.unit_price)}</td>
-                    <td className="px-5 py-2 text-right font-medium">
+                    </TD>
+                    <TD align="right" mono>
+                      {l.quantity_ordered}
+                    </TD>
+                    <TD align="right" mono>
+                      {l.quantity_received}
+                    </TD>
+                    <TD align="right" mono>
+                      {formatPKR(l.unit_price)}
+                    </TD>
+                    <TD align="right" mono className="font-medium">
                       {formatPKR(l.line_total)}
-                    </td>
-                  </tr>
+                    </TD>
+                  </TR>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TBody>
+            </Table>
+          </Panel>
         ))
       )}
+
+      {pos.length > 0 ? (
+        <p className="text-xs text-muted">
+          A{" "}
+          <Term definition="A draft has not been sent to the supplier yet — you can still change it. Submitting locks it and starts the lead-time clock.">
+            draft
+          </Term>{" "}
+          becomes live once submitted.{" "}
+          <Term definition="Receiving records what physically arrived and writes those quantities back into stock as a movement, so the ledger always matches the shelf.">
+            Receiving
+          </Term>{" "}
+          returns stock to the shelf.
+        </p>
+      ) : null}
     </div>
   );
 }

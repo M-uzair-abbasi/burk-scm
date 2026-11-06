@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Building2 } from "lucide-react";
 
+import { Panel } from "@/components/ui/Panel";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/Table";
+import { Term } from "@/components/ui/Tooltip";
 import { suppliers as suppliersApi } from "@/lib/resources";
 import type { Supplier } from "@/lib/types";
 
@@ -12,60 +18,77 @@ export default function SuppliersPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let alive = true;
     suppliersApi
       .list()
-      .then((r) => setRows(r.results))
-      .finally(() => setLoading(false));
+      .then((r) => {
+        if (alive) setRows(r.results);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800">
-            <th className="px-4 py-3 font-medium">Code</th>
-            <th className="px-4 py-3 font-medium">Name</th>
-            <th className="px-4 py-3 font-medium">City</th>
-            <th className="px-4 py-3 font-medium">Contact</th>
-            <th className="px-4 py-3 text-right font-medium">Lead time</th>
-            <th className="px-4 py-3 text-right font-medium">Products</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-          {loading ? (
-            <tr>
-              <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
-                Loading…
-              </td>
-            </tr>
-          ) : rows.length === 0 ? (
-            <tr>
-              <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
-                No suppliers yet.
-              </td>
-            </tr>
-          ) : (
-            rows.map((s) => (
-              <tr
-                key={s.id}
-                onClick={() => router.push(`/suppliers/${s.id}`)}
-                className="cursor-pointer transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-              >
-                <td className="px-4 py-3 font-mono text-xs">{s.code}</td>
-                <td className="px-4 py-3 font-medium">{s.name}</td>
-                <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                  {s.city || "—"}
-                </td>
-                <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                  {s.contact_person || "—"}
-                </td>
-                <td className="px-4 py-3 text-right">{s.default_lead_time_days} days</td>
-                <td className="px-4 py-3 text-right">{s.product_count}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Suppliers"
+        description="Who you restock from. Each supplier carries its own lead time and tiered pricing, which is what a purchase order uses to price itself."
+      />
+
+      <Panel bodyClassName="p-0">
+        {loading ? (
+          <div className="px-5 py-12 text-center text-sm text-secondary">
+            Loading suppliers…
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="p-5">
+            <EmptyState
+              icon={Building2}
+              title="No suppliers yet"
+              body="Suppliers are the businesses you buy stock from. Once one is linked to a product, that product can be reordered in a couple of clicks."
+            />
+          </div>
+        ) : (
+          <Table>
+            <THead>
+              <TH>Code</TH>
+              <TH>Name</TH>
+              <TH>City</TH>
+              <TH>Contact</TH>
+              <TH align="right">Lead time</TH>
+              <TH align="right">Products</TH>
+            </THead>
+            <TBody>
+              {rows.map((s) => (
+                <TR key={s.id} onClick={() => router.push(`/suppliers/${s.id}`)}>
+                  <TD mono>{s.code}</TD>
+                  <TD className="font-medium">{s.name}</TD>
+                  <TD className="text-secondary">{s.city || "—"}</TD>
+                  <TD className="text-secondary">{s.contact_person || "—"}</TD>
+                  <TD align="right" mono>
+                    {s.default_lead_time_days} days
+                  </TD>
+                  <TD align="right" mono>
+                    {s.product_count}
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+      </Panel>
+
+      <p className="text-xs text-muted">
+        <Term definition="How many days the supplier typically takes to deliver after a purchase order is submitted. It sets the expected date on any PO raised against them.">
+          Lead time
+        </Term>{" "}
+        can be overridden per product.
+      </p>
     </div>
   );
 }

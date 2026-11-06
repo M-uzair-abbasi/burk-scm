@@ -58,6 +58,20 @@ def _render(notification: Notification) -> tuple[str, str]:
 class EmailChannel(NotificationChannel):
     name = "email"
 
+    def health(self) -> dict:
+        backend = settings.EMAIL_BACKEND
+        simulated = backend in {
+            "django.core.mail.backends.console.EmailBackend",
+            "django.core.mail.backends.locmem.EmailBackend",
+            "django.core.mail.backends.dummy.EmailBackend",
+        }
+        configured = simulated or bool(settings.EMAIL_HOST)
+        return {
+            "ok": configured,
+            "mode": "simulated" if simulated else "live",
+            "backend": backend.rsplit(".", 1)[-1],
+        }
+
     def send(self, notification: Notification) -> dict:
         if not notification.recipient:
             raise ValueError("Order has no customer_email on file.")
@@ -69,4 +83,8 @@ class EmailChannel(NotificationChannel):
             to=[notification.recipient],
         )
         sent = message.send(fail_silently=False)
-        return {"backend": settings.EMAIL_BACKEND, "accepted": bool(sent)}
+        return {
+            "backend": settings.EMAIL_BACKEND,
+            "accepted": bool(sent),
+            "acknowledged": True,
+        }

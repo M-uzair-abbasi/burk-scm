@@ -1,9 +1,11 @@
 from django.contrib import admin
 
+from common.admin import ReadOnlyAdminMixin, ReadOnlyInlineMixin
+
 from .models import SalesOrder, SalesOrderLine, SyncRun
 
 
-class SalesOrderLineInline(admin.TabularInline):
+class SalesOrderLineInline(ReadOnlyInlineMixin, admin.TabularInline):
     model = SalesOrderLine
     extra = 0
     can_delete = False
@@ -12,7 +14,7 @@ class SalesOrderLineInline(admin.TabularInline):
 
 
 @admin.register(SalesOrder)
-class SalesOrderAdmin(admin.ModelAdmin):
+class SalesOrderAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = (
         "reference",
         "channel",
@@ -39,7 +41,7 @@ class SalesOrderAdmin(admin.ModelAdmin):
 
 
 @admin.register(SyncRun)
-class SyncRunAdmin(admin.ModelAdmin):
+class SyncRunAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = (
         "channel",
         "started_at",

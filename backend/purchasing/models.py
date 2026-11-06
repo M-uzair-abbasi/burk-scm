@@ -73,11 +73,20 @@ class PurchaseOrderLine(models.Model):
         on_delete=models.PROTECT,
         related_name="po_lines",
     )
+    supplier_product = models.ForeignKey(
+        "suppliers.SupplierProduct",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="purchase_order_lines",
+    )
     quantity_ordered = models.PositiveIntegerField()
     # A snapshot copied from the supplier tier at draft time, not a reference
     # to it. Tiers get renegotiated; pointing at one would retroactively
     # rewrite the value of orders already placed.
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    effective_lead_time_days = models.PositiveSmallIntegerField()
+    price_tier_min_quantity = models.PositiveIntegerField(null=True, blank=True)
     quantity_received = models.PositiveIntegerField(default=0)
 
     class Meta:

@@ -12,7 +12,12 @@ from decimal import Decimal
 
 from django.utils.dateparse import parse_datetime
 
-from .base import ChannelConnector, NormalizedLine, NormalizedOrder
+from .base import (
+    ChannelConnector,
+    NormalizedLine,
+    NormalizedOrder,
+    normalize_country_code,
+)
 from ._feed import load_feed
 
 # Burk's storefront states -> our normalized SalesOrder.Status values.
@@ -37,6 +42,9 @@ class BurkConnector(ChannelConnector):
     def normalize(self, raw: dict) -> NormalizedOrder:
         buyer = raw.get("buyer", {})
         amounts = raw.get("amounts", {})
+        delivery = raw.get("shipping_details", {})
+        ship_to = str(raw.get("ship_to", ""))
+        cod_amount = Decimal(str(raw.get("cod_amount", "0.00")))
 
         lines = []
         for item in raw.get("items", []):
@@ -59,7 +67,24 @@ class BurkConnector(ChannelConnector):
             customer_name=buyer.get("name", ""),
             customer_phone=buyer.get("phone", ""),
             customer_email=buyer.get("email", ""),
-            shipping_address=raw.get("ship_to", ""),
+            shipping_address=ship_to,
+            shipping_address_line1=str(delivery.get("address1") or ship_to),
+            shipping_address_line2=str(delivery.get("address2", "")),
+            shipping_city=str(delivery.get("city", "")),
+            shipping_province=str(delivery.get("province", "")),
+            shipping_postal_code=str(delivery.get("postal_code", "")),
+            shipping_country=normalize_country_code(delivery.get("country", "PK")),
+            customer_instructions=str(raw.get("customer_instructions", "")),
+            parcel_weight_kg=Decimal(str(raw.get("parcel_weight_kg", "0.000"))),
+            parcel_length_cm=Decimal(str(raw.get("parcel_length_cm", "0.00"))),
+            parcel_width_cm=Decimal(str(raw.get("parcel_width_cm", "0.00"))),
+            parcel_height_cm=Decimal(str(raw.get("parcel_height_cm", "0.00"))),
+            cod_amount=cod_amount,
+            payment_mode=str(
+                raw.get("payment_mode") or ("cod" if cod_amount > 0 else "prepaid")
+            ).lower(),
+            shipping_service_type=str(raw.get("shipping_service_type", "standard")),
+            pickup_account=str(raw.get("pickup_account", "")),
             currency=raw.get("currency", "PKR"),
             subtotal=Decimal(str(amounts.get("subtotal", "0.00"))),
             shipping_fee=Decimal(str(amounts.get("shipping", "0.00"))),

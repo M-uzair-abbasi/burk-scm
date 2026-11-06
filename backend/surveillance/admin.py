@@ -1,14 +1,17 @@
 from django.contrib import admin
 
+from common.admin import ReadOnlyAdminMixin
+
 from .models import PackagingRecording
 
 
 @admin.register(PackagingRecording)
-class PackagingRecordingAdmin(admin.ModelAdmin):
+class PackagingRecordingAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = (
         "session",
         "status",
         "duration_seconds",
+        "capture_started_at",
         "sealed_at",
         "compressed_at",
     )

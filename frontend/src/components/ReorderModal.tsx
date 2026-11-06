@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { TriangleAlert } from "lucide-react";
 
+import { Button } from "@/components/ui/Button";
+import { Dialog } from "@/components/ui/Dialog";
+import { Input } from "@/components/ui/Input";
 import { ApiError } from "@/lib/api";
 import { purchaseOrders, supplierProducts } from "@/lib/resources";
 import { formatPKR } from "@/lib/format";
@@ -31,116 +35,138 @@ export function ReorderModal({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    let alive = true;
     supplierProducts.list({ product: product.id }).then((r) => {
+      if (!alive) return;
       const links = r.results.filter((s) => s.is_active);
       setPreferred(links.find((s) => s.is_preferred) ?? links[0] ?? null);
       setLoaded(true);
     });
+    return () => {
+      alive = false;
+    };
   }, [product.id]);
 
   const unitPrice = useMemo(
     () => (preferred ? resolveUnitPrice(preferred, quantity) : null),
     [preferred, quantity],
   );
-  const lineTotal =
-    unitPrice !== null ? Number(unitPrice) * quantity : null;
+  const lineTotal = unitPrice !== null ? Number(unitPrice) * quantity : null;
 
   async function onSubmit() {
     setError(null);
     setSubmitting(true);
     try {
-      const po = await purchaseOrders.reorder({ product: product.id, quantity });
+      const po = await purchaseOrders.reorder({
+        product: product.id,
+        quantity,
+      });
       onCreated(po.id);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not create the order.");
+      setError(
+        err instanceof ApiError ? err.message : "Could not create the order.",
+      );
       setSubmitting(false);
     }
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-base font-semibold">Reorder {product.name}</h3>
-        <p className="mt-1 font-mono text-xs text-zinc-500">{product.sku}</p>
-
-        {!loaded ? (
-          <p className="mt-6 text-sm text-zinc-500">Loading supplier…</p>
-        ) : !preferred ? (
-          <div className="mt-6 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-            No supplier is linked to this product, so it can&apos;t be reordered
-            from here. Add a supplier first.
-          </div>
-        ) : (
-          <div className="mt-5 space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <div className="text-zinc-500">Supplier</div>
-                <div className="font-medium">{preferred.supplier_name}</div>
-              </div>
-              <div>
-                <div className="text-zinc-500">Lead time</div>
-                <div className="font-medium">
-                  {preferred.effective_lead_time_days} days
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-zinc-500">Quantity</label>
-              <input
-                type="number"
-                min={1}
-                value={quantity}
-                onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))}
-                className="w-32 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950"
-              />
-            </div>
-
-            <div className="rounded-md bg-zinc-50 p-3 text-sm dark:bg-zinc-800/50">
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Unit price</span>
-                <span className="font-medium">
-                  {unitPrice !== null ? formatPKR(unitPrice) : "No matching tier"}
-                </span>
-              </div>
-              <div className="mt-1 flex justify-between">
-                <span className="text-zinc-500">Order total</span>
-                <span className="font-semibold">
-                  {lineTotal !== null ? formatPKR(lineTotal) : "—"}
-                </span>
-              </div>
-            </div>
-
-            {error && (
-              <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-                {error}
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+      title={`Reorder ${product.name}`}
+      description={product.sku}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
             onClick={onSubmit}
             disabled={!preferred || unitPrice === null || submitting}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             {submitting ? "Creating…" : "Create draft PO"}
-          </button>
+          </Button>
+        </>
+      }
+    >
+      {!loaded ? (
+        <p className="text-sm text-secondary">Loading supplier…</p>
+      ) : !preferred ? (
+        <div className="flex gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2.5 text-sm text-warning-text">
+          <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+          <span>
+            No supplier is linked to this product, so it cannot be reordered
+            from here. Link one on the supplier record first.
+          </span>
         </div>
-      </div>
-    </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="eyebrow text-muted">Supplier</div>
+              <div className="mt-1.5 text-sm font-medium text-primary">
+                {preferred.supplier_name}
+              </div>
+            </div>
+            <div>
+              <div className="eyebrow text-muted">Lead time</div>
+              <div className="mt-1.5 text-sm font-medium text-primary">
+                {preferred.effective_lead_time_days} days
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="reorder-qty"
+              className="eyebrow mb-1.5 block text-muted"
+            >
+              Quantity
+            </label>
+            <Input
+              id="reorder-qty"
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(e) =>
+                setQuantity(Math.max(1, Number(e.target.value)))
+              }
+              className="tabular w-32 font-mono"
+            />
+          </div>
+
+          <div className="rounded-lg bg-sunken p-3 text-sm">
+            <div className="flex justify-between">
+              <span className="text-secondary">Unit price</span>
+              <span className="tabular font-mono font-medium text-primary">
+                {unitPrice !== null ? formatPKR(unitPrice) : "No matching tier"}
+              </span>
+            </div>
+            <div className="mt-1.5 flex justify-between">
+              <span className="text-secondary">Order total</span>
+              <span className="tabular font-mono font-semibold text-primary">
+                {lineTotal !== null ? formatPKR(lineTotal) : "—"}
+              </span>
+            </div>
+            {unitPrice === null ? (
+              <p className="mt-2 text-xs text-warning-text">
+                This quantity is below the supplier&rsquo;s lowest price tier.
+                Raise it to reach a tier.
+              </p>
+            ) : null}
+          </div>
+
+          {error ? (
+            <div className="rounded-lg border border-critical/30 bg-critical-soft px-3 py-2 text-sm text-critical-text">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Dialog>
   );
 }

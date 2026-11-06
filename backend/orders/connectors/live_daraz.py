@@ -13,11 +13,22 @@ and provide DARAZ_APP_KEY / DARAZ_APP_SECRET / DARAZ_ACCESS_TOKEN via settings.
 
 from __future__ import annotations
 
+from common.integrations import pending_live_health
+
 from .daraz import DarazConnector
 
 
 class LiveDarazConnector(DarazConnector):
     channel = "daraz"
+
+    def health(self) -> dict:
+        return pending_live_health(
+            "daraz",
+            "DARAZ_APP_KEY",
+            "DARAZ_APP_SECRET",
+            "DARAZ_ACCESS_TOKEN",
+            "DARAZ_API_BASE_URL",
+        )
 
     def fetch(self) -> list[dict]:
         raise NotImplementedError(

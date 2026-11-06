@@ -3,11 +3,13 @@
  * rather than hand-writing URLs, so the endpoint contract lives in one place.
  */
 
-import { apiFetch } from "./api";
+import { ApiError, apiFetch } from "./api";
 import type {
   Category,
   DashboardSummary,
   OrderSummary,
+  OperationalHealth,
+  OperationalMetrics,
   PackQueueOrder,
   PackSession,
   Paginated,
@@ -78,6 +80,23 @@ export const dashboard = {
   summary: () => apiFetch<DashboardSummary>("/api/dashboard/summary/"),
 };
 
+export const health = {
+  get: async () => {
+    try {
+      return await apiFetch<OperationalHealth>("/api/health/details/");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 503 && error.data) {
+        return error.data as OperationalHealth;
+      }
+      throw error;
+    }
+  },
+};
+
+export const metrics = {
+  get: () => apiFetch<OperationalMetrics>("/api/metrics/"),
+};
+
 export const suppliers = {
   list: (params?: Query) =>
     apiFetch<Paginated<Supplier>>(`/api/suppliers/${qs(params)}`),
@@ -127,6 +146,14 @@ export const packing = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  uploadRecording: (id: number, video: Blob, filename: string) => {
+    const form = new FormData();
+    form.append("video", video, filename);
+    return apiFetch<PackSession>(`/api/packing/${id}/recording/`, {
+      method: "POST",
+      body: form,
+    });
+  },
   cancel: (id: number) =>
     apiFetch<PackSession>(`/api/packing/${id}/cancel/`, {
       method: "POST",

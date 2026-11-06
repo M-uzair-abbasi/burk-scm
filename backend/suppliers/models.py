@@ -74,6 +74,14 @@ class SupplierProduct(models.Model):
             return self.lead_time_days
         return self.supplier.default_lead_time_days
 
+    def price_tier_for(self, quantity: int):
+        """Return the highest price tier whose minimum the quantity reaches."""
+        return (
+            self.price_tiers.filter(min_quantity__lte=quantity)
+            .order_by("-min_quantity")
+            .first()
+        )
+
     def unit_price_for(self, quantity: int) -> Decimal | None:
         """Price per unit when buying `quantity`.
 
@@ -81,11 +89,7 @@ class SupplierProduct(models.Model):
         None when the quantity is below every tier, which the caller must
         handle rather than assuming a price exists.
         """
-        tier = (
-            self.price_tiers.filter(min_quantity__lte=quantity)
-            .order_by("-min_quantity")
-            .first()
-        )
+        tier = self.price_tier_for(quantity)
         return tier.unit_price if tier else None
 
 

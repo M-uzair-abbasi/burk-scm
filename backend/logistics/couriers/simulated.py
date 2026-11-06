@@ -11,10 +11,10 @@ three couriers would follow the same shape.
 
 from __future__ import annotations
 
-import uuid
+import hashlib
 
 from ..models import Courier
-from .base import BookingResult, CourierAdapter
+from .base import BookingRequest, BookingResult, CourierAdapter
 
 _PREFIX = {
     Courier.LEOPARD: "LCS",
@@ -28,18 +28,26 @@ _ROTATION = [Courier.LEOPARD, Courier.TCS, Courier.TRAX, Courier.MNP]
 class SimulatedCourierAdapter(CourierAdapter):
     name = "simulated"
 
-    def book(self, order) -> BookingResult:
-        courier = _ROTATION[order.id % len(_ROTATION)]
-        tracking_number = f"{_PREFIX[courier]}{uuid.uuid4().int % 10**9:09d}"
+    def health(self) -> dict:
+        return {"ok": True, "mode": "simulated", "adapter": self.name}
+
+    def book(self, request: BookingRequest) -> BookingResult:
+        courier = _ROTATION[request.order_id % len(_ROTATION)]
+        suffix = hashlib.sha256(request.idempotency_key.encode("utf-8")).hexdigest()[:16].upper()
+        tracking_number = f"{_PREFIX[courier]}{suffix}"
         return BookingResult(
             courier=courier,
             tracking_number=tracking_number,
+            provider_booking_id=f"SIM-{suffix}",
+            label_reference=f"SIM-LABEL-{suffix}",
             label_url=f"https://labels.example.invalid/{tracking_number}.pdf",
             raw={
                 "courier": courier,
                 "tracking_number": tracking_number,
-                "order_reference": order.reference,
-                "destination": order.shipping_address,
+                "provider_booking_id": f"SIM-{suffix}",
+                "order_reference": request.order_reference,
+                "destination_city": request.city,
+                "idempotency_key": request.idempotency_key,
                 "simulated": True,
             },
         )

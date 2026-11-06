@@ -1,5 +1,7 @@
 from django.contrib import admin
 
+from common.admin import ReadOnlyAdminMixin
+
 from .models import Category, Product, StockMovement
 
 
@@ -33,7 +35,7 @@ class ProductAdmin(admin.ModelAdmin):
 
 
 @admin.register(StockMovement)
-class StockMovementAdmin(admin.ModelAdmin):
+class StockMovementAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     list_display = (
         "created_at",
         "product",
