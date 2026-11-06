@@ -146,6 +146,14 @@ export const packing = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  uploadRecording: (id: number, video: Blob, filename: string) => {
+    const form = new FormData();
+    form.append("video", video, filename);
+    return apiFetch<PackSession>(`/api/packing/${id}/recording/`, {
+      method: "POST",
+      body: form,
+    });
+  },
   cancel: (id: number) =>
     apiFetch<PackSession>(`/api/packing/${id}/cancel/`, {
       method: "POST",

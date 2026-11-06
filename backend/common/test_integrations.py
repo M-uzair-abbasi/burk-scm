@@ -23,7 +23,7 @@ DEMO_BACKENDS = {
 LIVE_BACKENDS = {
     "DEMO_MODE_ENABLED": False,
     "ORDER_CONNECTOR_BACKENDS": {"burk": "live", "daraz": "live"},
-    "PACKAGING_CAMERA_BACKEND": "live",
+    "PACKAGING_CAMERA_BACKEND": "browser",
     "COURIER_BACKEND": "live_leopard",
     "WHATSAPP_BACKEND": "live",
     "REVIEW_LINK_BACKEND": "live_burk",
@@ -72,7 +72,7 @@ class AdapterSelectionTests(SimpleTestCase):
             {
                 "LiveBurkConnector",
                 "LiveDarazConnector",
-                "LiveOverheadCameraAdapter",
+                "BrowserCameraAdapter",
                 "LiveLeopardAdapter",
                 "LiveWhatsAppChannel",
                 "LiveBurkReviewLinkProvider",

@@ -8,7 +8,7 @@ from rest_framework.response import Response
 
 from logistics.services import enqueue_shipment_booking
 from orders.models import SalesOrder, SalesOrderLine
-from surveillance.services import seal_recording, start_recording
+from surveillance.services import save_uploaded_recording, seal_recording, start_recording
 
 from .models import PackingSession
 from .serializers import PackScanSerializer, QueueOrderSerializer, session_detail
@@ -95,6 +95,21 @@ class PackingViewSet(viewsets.GenericViewSet):
         return Response(
             {"scan": PackScanSerializer(scan).data, "session": self._detail(session)}
         )
+
+    @action(detail=True, methods=["post"], url_path="recording")
+    def upload_recording(self, request, pk=None):
+        session = self.get_object()
+        video = request.FILES.get("video")
+        if video is None:
+            return Response(
+                {"detail": "No video file was uploaded."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            save_uploaded_recording(session, video)
+        except DjangoValidationError as exc:
+            return _bad(exc)
+        return Response(self._detail(session))
 
     @action(detail=True, methods=["post"], url_path="confirm-line")
     def confirm_line(self, request, pk=None):

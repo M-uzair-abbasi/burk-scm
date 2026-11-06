@@ -7,10 +7,12 @@ from common.integrations import require_demo_mode
 from .base import CameraAdapter, CaptureHandle, CaptureResult
 from .simulated import SimulatedOverheadCameraAdapter
 from .live_camera import LiveOverheadCameraAdapter
+from .browser import BrowserCameraAdapter
 
 CAMERAS = {
     "simulated": SimulatedOverheadCameraAdapter,
     "live": LiveOverheadCameraAdapter,
+    "browser": BrowserCameraAdapter,
 }
 
 __all__ = [

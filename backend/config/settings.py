@@ -46,6 +46,11 @@ NOTIFICATION_WEBHOOK_MAX_BYTES = env.int(
 )
 PACKAGING_CAMERA_BACKEND = env("PACKAGING_CAMERA_BACKEND", default="simulated")
 PACKAGING_CAMERA_SOURCE = env("PACKAGING_CAMERA_SOURCE", default="")
+# Only enforced for the browser camera backend, where the packer's device
+# uploads the raw clip over HTTP instead of the server pulling it itself.
+PACKAGING_UPLOAD_MAX_BYTES = env.int(
+    "PACKAGING_UPLOAD_MAX_BYTES", default=200 * 1024 * 1024
+)
 PACKAGING_PROCESS_MAX_ATTEMPTS = env.int(
     "PACKAGING_PROCESS_MAX_ATTEMPTS", default=3
 )

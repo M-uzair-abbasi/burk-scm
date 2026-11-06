@@ -5,17 +5,20 @@ a line and never counts toward completion, and completing a pack is the only
 thing that moves stock.
 """
 
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from pathlib import Path
 from threading import Barrier
 from unittest import skipUnless
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.db import connection, connections
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 
 from inventory.models import Product, StockMovement
@@ -30,8 +33,20 @@ from fulfillment.services import (
     session_progress,
     start_packing,
 )
+from surveillance.models import PackagingRecording
 
 User = get_user_model()
+
+
+WEBM_MAGIC = b"\x1a\x45\xdf\xa3"
+
+
+def make_video(content: bytes = b"fake-browser-video-bytes") -> SimpleUploadedFile:
+    """A fake upload that still carries a real WebM header, since the upload
+    endpoint now rejects anything that doesn't -- see detect_container()."""
+    return SimpleUploadedFile(
+        "clip.webm", WEBM_MAGIC + content, content_type="video/webm"
+    )
 
 
 def make_product(sku, barcode, stock=100):
@@ -378,6 +393,17 @@ class PackingAuthorizationTests(TestCase):
         self.session.refresh_from_db()
         self.assertEqual(self.session.status, PackingSession.Status.IN_PROGRESS)
 
+    def test_non_owner_cannot_upload_recording(self):
+        self._authenticate(self.other_operator)
+
+        response = self.client.post(
+            f"/api/packing/{self.session.id}/recording/",
+            {"video": make_video()},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_non_owner_cannot_claim_existing_active_session(self):
         self._authenticate(self.other_operator)
 
@@ -388,3 +414,121 @@ class PackingAuthorizationTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.session.refresh_from_db()
         self.assertEqual(self.session.operator, self.owner)
+
+
+@override_settings(PACKAGING_CAMERA_BACKEND="browser")
+class RecordingUploadTests(TestCase):
+    """The browser-camera upload endpoint: Module 4's client-side capture."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._override = override_settings(MEDIA_ROOT=self._tmp.name)
+        self._override.enable()
+        self.addCleanup(self._override.disable)
+        self.addCleanup(self._tmp.cleanup)
+
+        self.user = User.objects.create_user(
+            username="upload-op", password="x", role=User.Role.OPERATOR
+        )
+        self.product = make_product("BRK-UPLOAD", "UPLOAD-111", stock=5)
+        self.order = make_order(ref="SO-UPLOAD", lines=[(self.product, 1)])
+        # Carrier booking (triggered by /complete/) needs a real shipping
+        # address -- make_order() deliberately leaves this blank for the
+        # other tests in this file that never reach that far.
+        self.order.customer_name = "Upload Buyer"
+        self.order.customer_phone = "+923001230055"
+        self.order.shipping_address_line1 = "1 Test Street"
+        self.order.shipping_city = "Lahore"
+        self.order.shipping_province = "Punjab"
+        self.order.shipping_country = "PK"
+        self.order.item_count = 1
+        self.order.save()
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        start_response = self.client.post(
+            "/api/packing/", {"order": self.order.id}, format="json"
+        )
+        self.session_id = start_response.data["id"]
+        self.recording = PackagingRecording.objects.get(session_id=self.session_id)
+
+    def test_upload_lands_the_bytes_at_the_reserved_raw_path(self):
+        response = self.client.post(
+            f"/api/packing/{self.session_id}/recording/",
+            {"video": make_video(b"real-looking-webm-bytes")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        raw_abs = Path(self._tmp.name) / self.recording.raw_path
+        self.assertEqual(
+            raw_abs.read_bytes(), WEBM_MAGIC + b"real-looking-webm-bytes"
+        )
+
+    def test_missing_file_is_rejected(self):
+        response = self.client.post(
+            f"/api/packing/{self.session_id}/recording/", {}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_video_upload_is_rejected(self):
+        not_a_video = SimpleUploadedFile(
+            "clip.webm", b"<html>not a video</html>", content_type="video/webm"
+        )
+
+        response = self.client.post(
+            f"/api/packing/{self.session_id}/recording/",
+            {"video": not_a_video},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        raw_abs = Path(self._tmp.name) / self.recording.raw_path
+        self.assertFalse(raw_abs.exists())
+
+    def test_oversized_upload_is_rejected(self):
+        with override_settings(PACKAGING_UPLOAD_MAX_BYTES=10):
+            response = self.client.post(
+                f"/api/packing/{self.session_id}/recording/",
+                {"video": make_video(b"this upload is longer than ten bytes")},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        raw_abs = Path(self._tmp.name) / self.recording.raw_path
+        self.assertFalse(raw_abs.exists())
+
+    def test_upload_after_sealing_is_rejected(self):
+        record_scan(
+            self.order.packing_sessions.get(pk=self.session_id),
+            self.product.barcode,
+            user=self.user,
+        )
+        complete_response = self.client.post(
+            f"/api/packing/{self.session_id}/complete/", {}, format="json"
+        )
+        self.assertEqual(complete_response.status_code, 200)
+
+        response = self.client.post(
+            f"/api/packing/{self.session_id}/recording/",
+            {"video": make_video()},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_re_upload_before_sealing_overwrites_the_previous_attempt(self):
+        self.client.post(
+            f"/api/packing/{self.session_id}/recording/",
+            {"video": make_video(b"first attempt")},
+            format="multipart",
+        )
+        response = self.client.post(
+            f"/api/packing/{self.session_id}/recording/",
+            {"video": make_video(b"second attempt")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        raw_abs = Path(self._tmp.name) / self.recording.raw_path
+        self.assertEqual(raw_abs.read_bytes(), WEBM_MAGIC + b"second attempt")

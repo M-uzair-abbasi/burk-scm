@@ -377,6 +377,7 @@ export interface PackagingRecording {
   id: number;
   status: RecordingStatus;
   status_display: string;
+  requires_client_upload: boolean;
   video_url: string | null;
   duration_seconds: number | null;
   raw_size_bytes: number | null;

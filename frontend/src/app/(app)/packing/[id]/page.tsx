@@ -16,6 +16,10 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/AuthProvider";
+import {
+  PackagingCameraRecorder,
+  type PackagingCameraRecorderHandle,
+} from "@/components/PackagingCameraRecorder";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { Meter } from "@/components/ui/Meter";
 import { Panel } from "@/components/ui/Panel";
@@ -122,6 +126,7 @@ export default function PackingStationPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<PackagingCameraRecorderHandle>(null);
 
   const [session, setSession] = useState<PackSession | null>(null);
   const [loading, setLoading] = useState(true);
@@ -224,6 +229,24 @@ export default function PackingStationPage() {
     pollAttempts.current = 0;
     setPollStopped(false);
     try {
+      // The browser camera backend has no server-side capture to stop -- the
+      // clip only exists in this tab, so it has to be uploaded before we seal,
+      // or the worker will find nothing at the reserved path to compress.
+      if (session.recording?.requires_client_upload) {
+        const captured = await cameraRef.current?.stopAndCollect();
+        if (captured) {
+          try {
+            await packing.uploadRecording(
+              session.id,
+              captured.blob,
+              captured.filename,
+            );
+          } catch {
+            // Never block packing on the video -- the automation panel
+            // already surfaces a stuck/failed recording to managers.
+          }
+        }
+      }
       // Completion commits stock plus durable recording/shipment jobs. External
       // work proceeds in the worker and the bounded poll reflects that state.
       setSession(await packing.complete(session.id));
@@ -533,6 +556,11 @@ export default function PackingStationPage() {
               </Button>
             </div>
           </Panel>
+
+          <PackagingCameraRecorder
+            ref={cameraRef}
+            active={Boolean(session.recording?.requires_client_upload)}
+          />
 
           {error ? (
             <div className="flex items-center gap-2 rounded-lg border border-critical/30 bg-critical-soft px-4 py-2.5 text-sm text-critical-text">

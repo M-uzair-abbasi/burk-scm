@@ -49,8 +49,8 @@ def release_configuration_violations() -> list[str]:
     for channel, expected in expected_orders.items():
         if settings.ORDER_CONNECTOR_BACKENDS.get(channel) != expected:
             violations.append(f"orders.{channel} must select the live adapter.")
-    if settings.PACKAGING_CAMERA_BACKEND != "live":
-        violations.append("camera must select the live adapter.")
+    if settings.PACKAGING_CAMERA_BACKEND != "browser":
+        violations.append("camera must select the browser adapter.")
     if settings.COURIER_BACKEND != "live_leopard":
         violations.append("courier must select live_leopard.")
     if settings.WHATSAPP_BACKEND != "live":
@@ -69,7 +69,6 @@ def release_configuration_violations() -> list[str]:
         "BURK_ORDER_API_BASE_URL",
         "BURK_ORDER_API_CONSUMER_KEY",
         "BURK_ORDER_API_CONSUMER_SECRET",
-        "PACKAGING_CAMERA_SOURCE",
         "LEOPARD_API_KEY",
         "LEOPARD_API_PASSWORD",
         "WHATSAPP_ACCESS_TOKEN",

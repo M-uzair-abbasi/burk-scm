@@ -19,7 +19,7 @@ from operations.exceptions import PermanentWorkError
 from operations.services import enqueue, retry_delay_seconds
 
 from .camera import CaptureHandle, get_camera
-from .ffmpeg import run_ffmpeg
+from .ffmpeg import detect_container, run_ffmpeg
 from .models import PackagingRecording
 from .signing import customer_video_token, customer_video_url
 
@@ -39,6 +39,10 @@ def _media_path(relative: str) -> str:
 def _compress(raw_abs_path: str, compressed_abs_path: str) -> None:
     run_ffmpeg(
         [
+            "-protocol_whitelist",
+            "file",
+            "-f",
+            detect_container(raw_abs_path),
             "-i",
             raw_abs_path,
             "-vf",
@@ -61,6 +65,47 @@ def _checksum(path: str) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def save_uploaded_recording(session, uploaded_file) -> PackagingRecording:
+    """Land a browser-recorded clip at the raw_path start_recording() reserved.
+
+    Only the browser camera backend calls this -- the simulated and hardware
+    adapters materialize their own raw file inside process_recording_work via
+    camera.stop()/recover() instead. Writes to a temp file in the same
+    directory and renames into place so a worker racing this upload never
+    observes a partially-written file.
+    """
+    recording = getattr(session, "recording", None)
+    if recording is None:
+        raise ValidationError("Recording has not been started for this session.")
+    if recording.sealed_at is not None:
+        raise ValidationError(
+            "This pack has already been sealed; the recording can no longer "
+            "be replaced."
+        )
+    if uploaded_file.size > settings.PACKAGING_UPLOAD_MAX_BYTES:
+        raise ValidationError(
+            f"Recording is too large ({uploaded_file.size} bytes, limit is "
+            f"{settings.PACKAGING_UPLOAD_MAX_BYTES})."
+        )
+    # Reject anything that isn't actually a WebM/MP4 container before it ever
+    # touches disk or ffmpeg/ffprobe -- an uploaded file is untrusted input,
+    # and letting ffmpeg auto-detect the format from content (rather than
+    # pinning it, as detect_container()/_compress() now do) is the standard
+    # way a crafted non-video file turns into an SSRF/local-file-read.
+    header = uploaded_file.read(12)
+    uploaded_file.seek(0)
+    if not (header.startswith(b"\x1a\x45\xdf\xa3") or header[4:8] == b"ftyp"):
+        raise ValidationError("Recording must be a WebM or MP4 clip.")
+
+    final_path = _media_path(recording.raw_path)
+    tmp_path = f"{final_path}.part-{uuid.uuid4().hex}"
+    with open(tmp_path, "wb") as destination:
+        for chunk in uploaded_file.chunks():
+            destination.write(chunk)
+    os.replace(tmp_path, final_path)
+    return recording
 
 
 def _capture_handle(recording: PackagingRecording) -> CaptureHandle | None:

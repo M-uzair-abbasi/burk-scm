@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.urls import reverse
 
 from .models import PackagingRecording
@@ -13,6 +14,10 @@ def recording_detail(
         "id": recording.id,
         "status": recording.status,
         "status_display": recording.get_status_display(),
+        # Tells the client whether it must record+upload the clip itself
+        # (browser camera backend) or whether the server handles capture on
+        # its own (simulated / future hardware).
+        "requires_client_upload": settings.PACKAGING_CAMERA_BACKEND == "browser",
         "video_url": (
             reverse("recording-video", args=[recording.pk])
             if recording.status == PackagingRecording.Status.READY
